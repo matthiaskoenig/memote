@@ -17,7 +17,7 @@
 
 """Supporting functions for stoichiometric consistency checks."""
 
-from __future__ import absolute_import
+from __future__ import absolute_import, division
 
 import logging
 from operator import attrgetter
@@ -26,6 +26,8 @@ import numpy as np
 from cobra import Reaction
 from cobra.exceptions import Infeasible
 from cobra.flux_analysis import flux_variability_analysis
+from optlang.interface import OPTIMAL, INFEASIBLE
+from optlang.symbolics import Zero
 
 import memote.support.consistency_helpers as con_helpers
 import memote.support.helpers as helpers
@@ -55,11 +57,12 @@ ENERGY_COUPLES = {
     'MNXM558': 'MNXM2178',
     'MNXM21': 'MNXM12',
     'MNXM89557': 'MNXM20'}
+TOLERANCE_THRESHOLD = 1E-07
 
 
 def check_stoichiometric_consistency(model):
     """
-    Verify the consistency of the model stoichiometry.
+    Verify the consistency of the model's stoichiometry.
 
     Parameters
     ----------
@@ -76,29 +79,29 @@ def check_stoichiometric_consistency(model):
            Bioinformatics 24, no. 19 (2008): 2245.
 
     """
-    Model, Constraint, Variable, Objective = con_helpers.get_interface(model)
+    problem = model.problem
     # The transpose of the stoichiometric matrix N.T in the paper.
-    stoich_trans = Model()
+    stoich_trans = problem.Model()
     internal_rxns = con_helpers.get_internals(model)
     metabolites = set(met for rxn in internal_rxns for met in rxn.metabolites)
     LOGGER.info("model '%s' has %d internal reactions", model.id,
                 len(internal_rxns))
     LOGGER.info("model '%s' has %d internal metabolites", model.id,
                 len(metabolites))
-    for metabolite in metabolites:
-        stoich_trans.add(Variable(metabolite.id, lb=1))
+
+    stoich_trans.add([problem.Variable(m.id, lb=1) for m in metabolites])
     stoich_trans.update()
     con_helpers.add_reaction_constraints(
-        stoich_trans, internal_rxns, Constraint)
+        stoich_trans, internal_rxns, problem.Constraint)
     # The objective is to minimize the metabolite mass vector.
-    stoich_trans.objective = Objective(1)
+    stoich_trans.objective = problem.Objective(
+        Zero, direction="min", sloppy=True)
     stoich_trans.objective.set_linear_coefficients(
         {var: 1. for var in stoich_trans.variables})
-    stoich_trans.objective.direction = "min"
     status = stoich_trans.optimize()
-    if status == "optimal":
+    if status == OPTIMAL:
         return True
-    elif status == "infeasible":
+    elif status == INFEASIBLE:
         return False
     else:
         raise RuntimeError(
@@ -127,42 +130,43 @@ def find_unconserved_metabolites(model):
            Bioinformatics 24, no. 19 (2008): 2245.
 
     """
-    Model, Constraint, Variable, Objective = con_helpers.get_interface(model)
-    stoich_trans = Model()
+    problem = model.problem
+    stoich_trans = problem.Model()
     internal_rxns = con_helpers.get_internals(model)
     metabolites = set(met for rxn in internal_rxns for met in rxn.metabolites)
     # The binary variables k[i] in the paper.
     k_vars = list()
     for met in metabolites:
         # The element m[i] of the mass vector.
-        m_var = Variable(met.id)
-        k_var = Variable("k_{}".format(met.id), type="binary")
+        m_var = problem.Variable(met.id)
+        k_var = problem.Variable("k_{}".format(met.id), type="binary")
         k_vars.append(k_var)
         stoich_trans.add([m_var, k_var])
         # This constraint is equivalent to 0 <= k[i] <= m[i].
-        stoich_trans.add(Constraint(
+        stoich_trans.add(problem.Constraint(
             k_var - m_var, ub=0, name="switch_{}".format(met.id)))
     stoich_trans.update()
     con_helpers.add_reaction_constraints(
-        stoich_trans, internal_rxns, Constraint)
+        stoich_trans, internal_rxns, problem.Constraint)
     # The objective is to maximize the binary indicators k[i], subject to the
     # above inequality constraints.
-    stoich_trans.objective = Objective(1)
+    stoich_trans.objective = problem.Objective(
+        Zero, sloppy=True, direction="max")
     stoich_trans.objective.set_linear_coefficients(
         {var: 1. for var in k_vars})
-    stoich_trans.objective.direction = "max"
     status = stoich_trans.optimize()
-    if status == "optimal":
+    if status == OPTIMAL:
         # TODO: See if that could be a Boolean test `bool(var.primal)`.
         return set([model.metabolites.get_by_id(var.name[2:])
                     for var in k_vars if var.primal < 0.8])
     else:
         raise RuntimeError(
             "Could not compute list of unconserved metabolites."
-            " Solver status is '{}'"
-            " (only optimal or infeasible expected).".format(status))
+            " Solver status is '{}' (only optimal expected).".format(status))
 
 
+# FIXME: The results of this function are currently inconsistent with
+# published results.
 def find_inconsistent_min_stoichiometry(model, atol=1e-13):
     """
     Detect inconsistent minimal net stoichiometries.
@@ -179,7 +183,8 @@ def find_inconsistent_min_stoichiometry(model, atol=1e-13):
     -----
     See [1]_ section 3.3 for a complete description of the algorithm.
 
-
+    References
+    ----------
     .. [1] Gevorgyan, A., M. G Poolman, and D. A Fell.
            "Detection of Stoichiometric Inconsistencies in Biomolecular
            Models."
@@ -269,12 +274,6 @@ def find_elementary_leakage_modes(model, atol=1e-13):
         "Coming soon™ if considered useful.")
 
 
-# TODO: I had to remove the test for an infinite proton gradient i.e testing
-# if the model can somehow cycle h_c and h_p with closed bounds. This test
-# however is very specfic for the existence of a periplasm and since it is
-# not trivial to presuppose agnostically between which two compartments a
-# given model builds the PMF, I've removed this capability from this test.
-# It should be re-added though once we can identify prokaryotes vs eukaryotes.
 def detect_energy_generating_cycles(model, metabolite_id):
     u"""
     Detect erroneous energy-generating cycles for a a single metabolite.
@@ -377,7 +376,7 @@ def find_mass_unbalanced_reactions(reactions):
     Parameters
     ----------
     reactions : iterable
-        An iterable of ``cobra.Reaction``s.
+        An iterable of cobra.Reaction's.
 
     """
     return [
@@ -391,36 +390,11 @@ def find_charge_unbalanced_reactions(reactions):
     Parameters
     ----------
     reactions : iterable
-        An iterable of ``cobra.Reaction``s.
+        An iterable of cobra.Reaction's.
 
     """
     return [
         rxn for rxn in reactions if not con_helpers.is_charge_balanced(rxn)]
-
-
-def find_universally_blocked_reactions(model):
-    """
-    Find metabolic reactions that are blocked.
-
-    Parameters
-    ----------
-    model : cobra.Model
-        The metabolic model under investigation.
-
-    Notes
-    -----
-    Blocked reactions are those reactions that when optimized for cannot carry
-    any flux while all exchanges are open.
-
-    """
-    with model:
-        for rxn in model.exchanges:
-            rxn.bounds = (-1000, 1000)
-        fva_result = flux_variability_analysis(model)
-
-    blocked = fva_result.loc[(fva_result["maximum"] == 0.0) &
-                             (fva_result["minimum"] == 0.0)]
-    return [model.reactions.get_by_id(name) for name in blocked.index]
 
 
 def find_stoichiometrically_balanced_cycles(model):
@@ -452,39 +426,55 @@ def find_stoichiometrically_balanced_cycles(model):
     helpers.close_boundaries_sensibly(model)
     fva_result = flux_variability_analysis(model, loopless=False)
     return fva_result.index[
-        (fva_result["minimum"] == -1) | (fva_result["maximum"] == 1)].tolist()
+        (fva_result["minimum"] <= (-1 + TOLERANCE_THRESHOLD)) |
+        (fva_result["maximum"] >= (1 - TOLERANCE_THRESHOLD))
+    ].tolist()
 
 
 def find_orphans(model):
     """
     Return metabolites that are only consumed in reactions.
 
+    Metabolites that are involved in an exchange reaction are never
+    considered to be orphaned.
+
     Parameters
     ----------
     model : cobra.Model
         The metabolic model under investigation.
 
     """
-    return [met for met in model.metabolites
-            if (len(met.reactions) > 0) and all(
-                (not rxn.reversibility) and (rxn.metabolites[met] < 0)
-                for rxn in met.reactions)]
+    exchange = frozenset(model.exchanges)
+    return [
+        met for met in model.metabolites
+        if (len(met.reactions) > 0) and all(
+            (not rxn.reversibility) and (rxn not in exchange) and
+            (rxn.metabolites[met] < 0) for rxn in met.reactions
+        )
+    ]
 
 
 def find_deadends(model):
     """
     Return metabolites that are only produced in reactions.
 
+    Metabolites that are involved in an exchange reaction are never
+    considered to be dead ends.
+
     Parameters
     ----------
     model : cobra.Model
         The metabolic model under investigation.
 
     """
-    return [met for met in model.metabolites
-            if (len(met.reactions) > 0) and all(
-                (not rxn.reversibility) and
-                (rxn.metabolites[met] > 0) for rxn in met.reactions)]
+    exchange = frozenset(model.exchanges)
+    return [
+        met for met in model.metabolites
+        if (len(met.reactions) > 0) and all(
+            (not rxn.reversibility) and (rxn not in exchange) and
+            (rxn.metabolites[met] > 0) for rxn in met.reactions
+        )
+    ]
 
 
 def find_disconnected(model):
@@ -500,76 +490,32 @@ def find_disconnected(model):
     return [met for met in model.metabolites if len(met.reactions) == 0]
 
 
-def find_metabolites_produced_with_closed_bounds(model):
-    """
-    Return metabolites that can be produced when boundary reactions are closed.
-
-    Parameters
-    ----------
-    model : cobra.Model
-        The metabolic model under investigation.
-
-    """
-    mets_produced = list()
-    helpers.close_boundaries_sensibly(model)
-    for met in model.metabolites:
-        with model:
-            exch = model.add_boundary(
-                met, type='irrex', reaction_id='IRREX', lb=0, ub=1
-            )
-            if helpers.run_fba(model, exch.id) > 0:
-                mets_produced.append(met)
-    return mets_produced
-
-
-def find_metabolites_consumed_with_closed_bounds(model):
-    """
-    Return metabolites that can be consumed when boundary reactions are closed.
-
-    Reverse case from 'find_metabolites_produced_with_closed_bounds', just
-    like metabolites should not be produced from nothing, mass should not
-    simply be removed from the model.
-
-    Parameters
-    ----------
-    model : cobra.Model
-        The metabolic model under investigation.
-
-    """
-    mets_consumed = list()
-    helpers.close_boundaries_sensibly(model)
-    for met in model.metabolites:
-        with model:
-            exch = model.add_boundary(
-                met, type='irrex', reaction_id='IRREX', lb=-1, ub=0
-            )
-            if helpers.run_fba(model, exch.id, direction='min') < 0:
-                mets_consumed.append(met)
-    return mets_consumed
-
-
 def find_metabolites_not_produced_with_open_bounds(model):
     """
-    Return metabolites that cannot be produced with open boundary reactions.
+    Return metabolites that cannot be produced with open exchange reactions.
 
-    Inverse case from 'find_metabolites_produced_with_closed_bounds', just
-    like metabolites should not be produced from nothing, metabolites should
-    all be produced with open exhanges.
+    A perfect model should be able to produce each and every metabolite when
+    all medium components are available.
 
     Parameters
     ----------
     model : cobra.Model
         The metabolic model under investigation.
+
+    Returns
+    -------
+    list
+        Those metabolites that could not be produced.
 
     """
     mets_not_produced = list()
-    helpers.open_boundaries(model)
+    helpers.open_exchanges(model)
     for met in model.metabolites:
         with model:
             exch = model.add_boundary(
-                met, type="irrex", reaction_id="IRREX", lb=0, ub=1)
+                met, type="irrex", reaction_id="IRREX", lb=0, ub=1000)
             solution = helpers.run_fba(model, exch.id)
-            if solution is np.nan or solution == 0:
+            if np.isnan(solution) or solution < TOLERANCE_THRESHOLD:
                 mets_not_produced.append(met)
     return mets_not_produced
 
@@ -578,24 +524,28 @@ def find_metabolites_not_consumed_with_open_bounds(model):
     """
     Return metabolites that cannot be consumed with open boundary reactions.
 
-    Reverse case from 'find_metabolites_not_produced_with_open_bounds', just
-    like metabolites should all be produced with open exchanges, they should
-    also all be consumed with open exchanges.
+    When all metabolites can be secreted, it should be possible for each and
+    every metabolite to be consumed in some form.
 
     Parameters
     ----------
     model : cobra.Model
         The metabolic model under investigation.
 
+    Returns
+    -------
+    list
+        Those metabolites that could not be consumed.
+
     """
     mets_not_consumed = list()
-    helpers.open_boundaries(model)
+    helpers.open_exchanges(model)
     for met in model.metabolites:
         with model:
             exch = model.add_boundary(
-                met, type="irrex", reaction_id="IRREX", lb=-1, ub=0)
+                met, type="irrex", reaction_id="IRREX", lb=-1000, ub=0)
             solution = helpers.run_fba(model, exch.id, direction="min")
-            if solution is np.nan or solution == 0:
+            if np.isnan(solution) or abs(solution) < TOLERANCE_THRESHOLD:
                 mets_not_consumed.append(met)
     return mets_not_consumed
 
@@ -609,52 +559,54 @@ def find_reactions_with_unbounded_flux_default_condition(model):
     model : cobra.Model
         The metabolic model under investigation.
 
-    Returns:
-    --------
-    unlimited_reactions: list
-        A list of reactions that in default modeling conditions are able to
-        carry flux as high/low as the systems maximal and minimal bounds.
-    fraction: float
-        The fraction of the amount of unbounded reactions to the amount of
-        non-blocked reactions.
-    conditionally_blocked_reactions: list
-        A list of reactions that in default modeling conditions are not able
-        to carry flux at all.
+    Returns
+    -------
+    tuple
+        list
+            A list of reactions that in default modeling conditions are able to
+            carry flux as high/low as the systems maximal and minimal bounds.
+        float
+            The fraction of the amount of unbounded reactions to the amount of
+            non-blocked reactions.
+        list
+            A list of reactions that in default modeling conditions are not able
+            to carry flux at all.
 
     """
-    with model:
-        try:
-            fva_result = flux_variability_analysis(model)
-        except Infeasible as err:
-            LOGGER.error("Failed to find reactions with unbounded flux "
-                         "because '{}'. This may be a bug.".format(err))
-            raise Infeasible("It was not possible to run flux variability "
-                             "analysis on the model. Make sure that the model "
-                             "can be solved! Check if the constraints are not "
-                             "too strict.")
-        conditionally_blocked = fva_result.loc[(fva_result["maximum"] == 0.0) &
-                                               (fva_result["minimum"] == 0.0)]
-        max_bound = max([rxn.upper_bound for rxn in model.reactions])
-        min_bound = min([rxn.lower_bound for rxn in model.reactions])
-        unlimited_flux = fva_result.loc[(fva_result["maximum"] == max_bound) |
-                                        (fva_result["minimum"] == min_bound)]
-        conditionally_blocked_reactions = [model.reactions.get_by_id(met_id)
-                                           for met_id in
-                                           conditionally_blocked.index]
-        unlimited_reactions = [model.reactions.get_by_id(met_id) for met_id in
-                               unlimited_flux.index]
-        try:
-            fraction = len(unlimited_reactions) / float(
-                (len(model.reactions) - len(conditionally_blocked_reactions)))
-        except ZeroDivisionError:
-            LOGGER.error("Division by Zero! Failed to calculate the "
-                         "fraction of unbounded reactions. Does this model "
-                         "have any reactions at all?")
-            raise ZeroDivisionError("It was not possible to calculate the "
-                                    "fraction of unbounded reactions to "
-                                    "un-blocked reactions. This may be because"
-                                    "the model doesn't have any reactions at "
-                                    "all or that none of the reactions can "
-                                    "carry a flux larger than zero!")
+    try:
+        fva_result = flux_variability_analysis(model, fraction_of_optimum=1.0)
+    except Infeasible as err:
+        LOGGER.error("Failed to find reactions with unbounded flux "
+                     "because '{}'. This may be a bug.".format(err))
+        raise Infeasible("It was not possible to run flux variability "
+                         "analysis on the model. Make sure that the model "
+                         "can be solved! Check if the constraints are not "
+                         "too strict.")
+    # Per reaction (row) the flux is below threshold (close to zero).
+    conditionally_blocked = fva_result.loc[
+        fva_result.abs().max(axis=1) < TOLERANCE_THRESHOLD
+    ].index.tolist()
+    small, large = helpers.find_bounds(model)
+    # Find those reactions whose flux is close to or outside of the median
+    # upper or lower bound, i.e., appears unconstrained.
+    unlimited_flux = fva_result.loc[
+        np.isclose(fva_result["maximum"], large, atol=TOLERANCE_THRESHOLD) |
+        (fva_result["maximum"] > large) |
+        np.isclose(fva_result["minimum"], small, atol=TOLERANCE_THRESHOLD) |
+        (fva_result["minimum"] < small)
+    ].index.tolist()
+    try:
+        fraction = len(unlimited_flux) / \
+            (len(model.reactions) - len(conditionally_blocked))
+    except ZeroDivisionError:
+        LOGGER.error("Division by Zero! Failed to calculate the "
+                     "fraction of unbounded reactions. Does this model "
+                     "have any reactions at all?")
+        raise ZeroDivisionError("It was not possible to calculate the "
+                                "fraction of unbounded reactions to "
+                                "un-blocked reactions. This may be because"
+                                "the model doesn't have any reactions at "
+                                "all or that none of the reactions can "
+                                "carry a flux larger than zero!")
 
-        return unlimited_reactions, fraction, conditionally_blocked_reactions
+    return unlimited_flux, fraction, conditionally_blocked

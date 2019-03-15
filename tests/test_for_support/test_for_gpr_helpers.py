@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Copyright 2017 Novo Nordisk Foundation Center for Biosustainability,
+# Copyright 2016 Novo Nordisk Foundation Center for Biosustainability,
 # Technical University of Denmark.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,24 +15,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""Ensure the expected functioning of ``memote.support.gpr_helpers``."""
+
 from __future__ import absolute_import
 
-from builtins import str
-from os.path import basename
-from shutil import copyfile
-
 import pytest
-from click.testing import CliRunner
+
+from memote.support.gpr_helpers import find_top_level_complex
 
 
-@pytest.fixture(scope="session")
-def runner():
-    return CliRunner()
-
-
-@pytest.fixture(scope="session")
-def model_file(small_file, tmpdir_factory):
-    filename = str(tmpdir_factory.mktemp("small_models").join(
-        basename(small_file)))
-    copyfile(small_file, filename)
-    return filename
+@pytest.mark.parametrize("gpr, expected", [
+    ("gene1 and gene2", 2),
+    ("gene1 or gene2", 0),
+    ("gene1 and (gene2 or gene3)", 3)
+])
+def test_find_functional_units(gpr, expected):
+    """Expect the size of the unique elements in a complex to be correct."""
+    assert find_top_level_complex(gpr) == expected

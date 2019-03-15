@@ -19,27 +19,28 @@
 
 from __future__ import absolute_import
 
-import io
 import os
 import sys
 import logging
-from functools import partial
-from os.path import join
+from gzip import GzipFile
+from os.path import join, isfile
 from multiprocessing import Process
 from getpass import getpass
 from time import sleep
+from tempfile import mkdtemp
+from shutil import copy2, move
 
 import click
 import click_log
 import git
-import ruamel.yaml as yaml
+import travis.encrypt as te
 from cookiecutter.main import cookiecutter, get_user_config
 from github import (
     Github, BadCredentialsException, UnknownObjectException, GithubException)
+from sqlalchemy import create_engine
 from sqlalchemy.exc import ArgumentError
 from travispy import TravisPy
 from travispy.errors import TravisError
-from travis.encrypt import encrypt_key, retrieve_public_key
 
 import memote.suite.api as api
 import memote.suite.cli.callbacks as callbacks
@@ -48,6 +49,8 @@ from memote.suite.cli import CONTEXT_SETTINGS
 from memote.suite.cli.reports import report
 from memote.suite.results import (
     ResultManager, RepoResultManager, SQLResultManager, HistoryManager)
+from memote.utils import is_modified, stdout_notifications
+
 
 LOGGER = logging.getLogger()
 click_log.basic_config(LOGGER)
@@ -64,9 +67,10 @@ def cli():
     Metabolic model testing command line tool.
 
     In its basic invocation memote runs a test suite on a metabolic model.
-    Through various subcommands it can further generate a pretty HTML report,
-    generate a model repository structure for starting a new project, and
-    recreate the test result history.
+    Through various subcommands it can further generate three types of pretty
+    HTML reports (snapshot, diff and history), generate a model repository
+    structure for starting a new project, and recreate the test result history.
+
     """
     pass
 
@@ -78,26 +82,28 @@ def cli():
               help="Whether or not to collect test data needed for "
                    "generating a report.")
 @click.option("--filename", type=click.Path(exists=False, writable=True),
-              default="result.json", show_default=True,
-              help="Path for the collected results as JSON.")
-@click.option("--location", type=str, envvar="MEMOTE_LOCATION",
+              default="result.json.gz", show_default=True,
+              help="Path for the collected results as JSON. Ignored when "
+                   "working with a git repository.")
+@click.option("--location", envvar="MEMOTE_LOCATION",
               help="If invoked inside a git repository, try to interpret "
               "the string as an rfc1738 compatible database URL which will be "
               "used to store the test results. Otherwise write to this "
               "directory using the commit hash as the filename.")
-@click.option("--ignore-git", is_flag=True, show_default=True,
+@click.option("--ignore-git", is_flag=True,
               help="Avoid checking the git repository status.")
 @click.option("--pytest-args", "-a", callback=callbacks.validate_pytest_args,
               help="Any additional arguments you want to pass to pytest. "
                    "Should be given as one continuous string in quotes.")
-@click.option("--exclusive", type=str, multiple=True, metavar="TEST",
+@click.option("--exclusive", multiple=True, metavar="TEST",
               help="The name of a test or test module to be run exclusively. "
                    "All other tests are skipped. This option can be used "
                    "multiple times and takes precedence over '--skip'.")
-@click.option("--skip", type=str, multiple=True, metavar="TEST",
+@click.option("--skip", multiple=True, metavar="TEST",
               help="The name of a test or test module to be skipped. This "
                    "option can be used multiple times.")
-@click.option("--solver", type=click.Choice(["cplex", "glpk", "gurobi"]),
+@click.option("--solver",
+              type=click.Choice(["cplex", "glpk", "gurobi", "glpk_exact"]),
               default="glpk", show_default=True,
               help="Set the solver to be used.")
 @click.option("--experimental", type=click.Path(exists=True, dir_okay=False),
@@ -107,49 +113,101 @@ def cli():
               multiple=True,
               help="A path to a directory containing custom test "
                    "modules. Please refer to the documentation for more "
-                   "information on how to write custom tests. May be "
-                   "specified multiple times.")
+                   "information on how to write custom tests "
+                   "(memote.readthedocs.io). This option can be specified "
+                   "multiple times.")
+@click.option("--deployment", default="gh-pages", show_default=True,
+              help="Results will be read from and committed to the given "
+                   "branch.")
+@click.option("--skip-unchanged", is_flag=True,
+              help="Skip memote run on commits where the model was not "
+                   "changed.")
 @click.argument("model", type=click.Path(exists=True, dir_okay=False),
-                envvar="MEMOTE_MODEL", callback=callbacks.validate_model)
+                envvar="MEMOTE_MODEL")
 def run(model, collect, filename, location, ignore_git, pytest_args, exclusive,
-        skip, solver, experimental, custom_tests):
+        skip, solver, experimental, custom_tests, deployment,
+        skip_unchanged):
     """
-    Run the test suite and collect results.
+    Run the test suite on a single model and collect results.
 
     MODEL: Path to model file. Can also be supplied via the environment variable
     MEMOTE_MODEL or configured in 'setup.cfg' or 'memote.ini'.
+
     """
+    def is_verbose(arg):
+        return (arg.startswith("--verbosity") or
+                arg.startswith("-v") or arg.startswith("--verbose") or
+                arg.startswith("-q") or arg.startswith("--quiet"))
+
     if ignore_git:
         repo = None
     else:
         repo = callbacks.probe_git()
-    if not any(a.startswith("--tb") for a in pytest_args):
-        pytest_args = ["--tb", "short"] + pytest_args
-    if not any(a.startswith("-v") for a in pytest_args):
-        pytest_args.append("-vv")
-    # Add further directories to search for tests.
-    pytest_args.extend(custom_tests)
-    model.solver = solver
     if collect:
-        if repo is None:
-            manager = ResultManager()
-            store = partial(manager.store, filename=filename)
-        else:
+        if repo is not None:
             if location is None:
                 LOGGER.critical(
                     "Working with a repository requires a storage location.")
                 sys.exit(1)
+    if not any(a.startswith("--tb") for a in pytest_args):
+        pytest_args = ["--tb", "short"] + pytest_args
+    if not any(is_verbose(a) for a in pytest_args):
+        pytest_args.append("-vv")
+    # Check if the model was changed in this commit. Exit `memote run` if this
+    # was not the case.
+    if skip_unchanged and repo is not None:
+        commit = repo.head.commit
+        if not is_modified(model, commit):
+            LOGGER.info("The model was not modified in commit '%s'. Skipping.",
+                        commit.hexsha)
+            sys.exit(0)
+    # Add further directories to search for tests.
+    pytest_args.extend(custom_tests)
+    # Check if the model can be loaded at all.
+    model, sbml_ver, notifications = api.validate_model(model)
+    if model is None:
+        LOGGER.critical(
+            "The model could not be loaded due to the following SBML errors.")
+        stdout_notifications(notifications)
+        sys.exit(1)
+    model.solver = solver
+    code, result = api.test_model(
+        model=model, sbml_version=sbml_ver, results=True,
+        pytest_args=pytest_args, skip=skip,
+        exclusive=exclusive, experimental=experimental)
+    if collect:
+        if repo is None:
+            manager = ResultManager()
+            manager.store(result, filename=filename)
+        else:
+            LOGGER.info("Checking out deployment branch.")
+            # If the repo HEAD is pointing to the most recent branch then
+            # GitPython's `repo.active_branch` works. Yet, if the repo is in
+            # detached HEAD state, i.e., when a user has checked out a specific
+            # commit as opposed to a branch, this won't work and throw a
+            # `TypeError`, which we are circumventing below.
+            try:
+                previous = repo.active_branch
+                previous_cmt = previous.commit
+                is_branch = True
+            except TypeError:
+                previous_cmt = repo.head.commit
+                is_branch = False
+            repo.git.checkout(deployment)
             try:
                 manager = SQLResultManager(repository=repo, location=location)
             except (AttributeError, ArgumentError):
                 manager = RepoResultManager(repository=repo, location=location)
-            store = manager.store
-    code, result = api.test_model(
-        model=model, results=True, pytest_args=pytest_args, skip=skip,
-        exclusive=exclusive, experimental=experimental)
-    if collect:
-        store(result=result)
-    sys.exit(code)
+            LOGGER.info(
+                "Committing result and changing back to working branch.")
+            manager.store(result, commit=previous_cmt.hexsha)
+            repo.git.add(".")
+            repo.index.commit(
+                "chore: add result for {}".format(previous_cmt.hexsha))
+            if is_branch:
+                previous.checkout()
+            else:
+                repo.commit(previous_cmt)
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
@@ -162,7 +220,6 @@ def run(model, collect, filename, location, ignore_git, pytest_args, exclusive,
                                   "cookiecutter-memote.json")))
 @click.option("--directory", type=click.Path(exists=True, file_okay=False,
                                              writable=True),
-              envvar="MEMOTE_DIRECTORY",
               help="Create a new model repository in the given directory.")
 def new(directory, replay):
     """
@@ -172,6 +229,7 @@ def new(directory, replay):
     and set up a new directory structure that will make your life easier. The
     new directory will be placed in the current directory or respect the given
     --directory option.
+
     """
     if directory is None:
         directory = os.getcwd()
@@ -179,51 +237,64 @@ def new(directory, replay):
                  replay=replay)
 
 
-def _test_history(model, solver, manager, commit, pytest_args, skip,
+def _model_from_stream(stream, filename):
+    if filename.endswith(".gz"):
+        with GzipFile(fileobj=stream) as file_handle:
+            model, sbml_ver, notifications = api.validate_model(file_handle)
+    else:
+        model, sbml_ver, notifications = api.validate_model(stream)
+    return model, sbml_ver, notifications
+
+
+def _test_history(model, sbml_ver, solver, manager, commit, pytest_args, skip,
                   exclusive, experimental):
-    model = callbacks.validate_model(None, "model", model)
     model.solver = solver
     _, result = api.test_model(
-        model, results=True, pytest_args=pytest_args, skip=skip,
-        exclusive=exclusive, experimental=experimental)
+        model, sbml_version=sbml_ver, results=True, pytest_args=pytest_args,
+        skip=skip, exclusive=exclusive, experimental=experimental)
     manager.store(result, commit=commit)
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
 @click.help_option("--help", "-h")
-@click.option("--yes", "-y", is_flag=True, callback=callbacks.abort_if_false,
-              expose_value=False, help="Confirm overwriting previous results.",
-              prompt="Are you sure that you want to change history?")
-@click.option("--location", type=str, envvar="MEMOTE_LOCATION",
-              help="Generated JSON files from the commit history will be "
-                   "written to this directory.")
+@click.option("--rewrite/--no-rewrite", default=False,
+              help="Whether to overwrite existing results.")
+@click.option("--location", envvar="MEMOTE_LOCATION",
+              help="Location of test results. Can either by a directory or an "
+                   "rfc1738 compatible database URL.")
 @click.option("--pytest-args", "-a", callback=callbacks.validate_pytest_args,
               help="Any additional arguments you want to pass to pytest. "
                    "Should be given as one continuous string.")
+@click.option("--deployment", default="gh-pages", show_default=True,
+              help="Results will be read from and committed to the given "
+                   "branch.")
 @click.option("--solver", type=click.Choice(["cplex", "glpk", "gurobi"]),
               default="glpk", show_default=True,
               help="Set the solver to be used.")
-@click.option("--experimental", type=click.Path(exists=True, dir_okay=False),
-              default=None, callback=callbacks.validate_experimental,
-              help="Define additional tests using experimental data.")
-@click.option("--exclusive", type=str, multiple=True, metavar="TEST",
+@click.option("--exclusive", multiple=True, metavar="TEST",
               help="The name of a test or test module to be run exclusively. "
                    "All other tests are skipped. This option can be used "
                    "multiple times and takes precedence over '--skip'.")
-@click.option("--skip", type=str, multiple=True, metavar="TEST",
+@click.option("--skip", multiple=True, metavar="TEST",
               help="The name of a test or test module to be skipped. This "
                    "option can be used multiple times.")
-@click.argument("model", type=click.Path(exists=True, dir_okay=False),
+@click.argument("model", type=click.Path(exists=False, dir_okay=False),
                 envvar="MEMOTE_MODEL")
+@click.argument("message")
 @click.argument("commits", metavar="[COMMIT] ...", nargs=-1)
-def history(model, solver, location, pytest_args, commits, skip,
-            exclusive, experimental):  # noqa: D301
+def history(model, message, rewrite, solver, location, pytest_args, deployment,
+            commits, skip, exclusive, experimental=None):  # noqa: D301
     """
     Re-compute test results for the git branch history.
 
-    This command requires the model file to be supplied either by the
-    environment variable MEMOTE_MODEL or configured in a 'setup.cfg' or
-    'memote.ini' file.
+    MODEL is the path to the model file.
+
+    MESSAGE is a commit message in case results were modified or added.
+
+    [COMMIT] ... It is possible to list out individual commits that should be
+    re-computed or supply a range <oldest commit>..<newest commit>, for example,
+
+        memote history model.xml "chore: re-compute history" 6b84d05..cd49c85
 
     There are two distinct modes:
 
@@ -232,41 +303,99 @@ def history(model, solver, location, pytest_args, commits, skip,
        This should only be necessary when memote is first used with existing
        model repositories.
     2. By giving memote specific commit hashes, it will re-compute test results
-       for those only.
+       for those only. This can also be achieved by supplying a commit range.
+
     """
+    callbacks.validate_path(model)
+    if location is None:
+        raise click.BadParameter("No 'location' given or configured.")
     if "--tb" not in pytest_args:
         pytest_args = ["--tb", "no"] + pytest_args
     try:
         repo = git.Repo()
-    # TODO: If no directory was given use system tempdir and create report in
-    #  gh-pages.
     except git.InvalidGitRepositoryError:
         LOGGER.critical(
             "The history requires a git repository in order to follow "
-            "the current branch's commit history.")
+            "the model's commit history.")
         sys.exit(1)
+    previous = repo.active_branch
+    # Temporarily move the results to a new location so that they are
+    # available while checking out the various commits.
+    repo.heads[deployment].checkout()
+    engine = None
+    tmp_location = mkdtemp()
     try:
-        manager = SQLResultManager(repository=repo, location=location)
+        # Test if the location can be opened as a database.
+        engine = create_engine(location)
+        engine.dispose()
+        new_location = location
+        if location.startswith("sqlite"):
+            # Copy the SQLite database to a temporary location. Other
+            # databases are not file-based and thus git independent.
+            url = location.split("/", maxsplit=3)
+            if isfile(url[3]):
+                copy2(url[3], tmp_location)
+            new_location = "{}/{}".format(
+                "/".join(url[:3] + [tmp_location]), url[3])
+            LOGGER.info("Temporarily moving database from '%s' to '%s'.",
+                        url[3], join(tmp_location, url[3]))
+        manager = SQLResultManager(repository=repo, location=new_location)
     except (AttributeError, ArgumentError):
-        manager = RepoResultManager(repository=repo, location=location)
-    if len(commits) > 0:
-        # TODO: Convert hashes to `git.Commit` instances.
-        raise NotImplementedError(u"Coming soon™.")
-    else:
-        history = HistoryManager(repository=repo, manager=manager)
-        history.build_branch_structure()
-    for commit in history.iter_commits():
-        repo.git.checkout(commit)
-        # TODO: Skip this commit if model was not touched.
+        LOGGER.info("Temporarily moving results from '%s' to '%s'.",
+                    location, tmp_location)
+        move(location, tmp_location)
+        new_location = join(tmp_location, location)
+        manager = RepoResultManager(repository=repo, location=new_location)
+    history = HistoryManager(repository=repo, manager=manager)
+    history.load_history(model, skip={deployment})
+    if len(commits) == 0:
+        commits = list(history.iter_commits())
+    elif len(commits) == 1 and ".." in commits[0]:
+        commits = repo.git.rev_list(commits[0]).split(os.linesep)
+    for commit in commits:
+        cmt = repo.commit(commit)
+        # Rewrite to full length hexsha.
+        commit = cmt.hexsha
+        if not is_modified(model, cmt):
+            LOGGER.info(
+                "The model was not modified in commit '{}'. "
+                "Skipping.".format(commit))
+            continue
+        # Should we overwrite an existing result?
+        if commit in history and not rewrite:
+            LOGGER.info(
+                "Result for commit '{}' exists. Skipping.".format(commit))
+            continue
         LOGGER.info(
             "Running the test suite for commit '{}'.".format(commit))
+        blob = cmt.tree[model]
+        model_obj, sbml_ver, notifications = _model_from_stream(
+            blob.data_stream, blob.name
+        )
+        if model_obj is None:
+            LOGGER.critical("The model could not be loaded due to the "
+                            "following SBML errors.")
+            stdout_notifications(notifications)
+            continue
         proc = Process(
             target=_test_history,
-            args=(model, solver, manager, commit, pytest_args, skip,
-                  exclusive, experimental))
+            args=(model_obj, sbml_ver, solver, manager, commit,
+                  pytest_args, skip, exclusive, experimental))
         proc.start()
         proc.join()
-    history.reset()
+    # Copy back all new and modified files and add them to the index.
+    repo.heads[deployment].checkout()
+    if engine is not None:
+        manager.session.close()
+        if location.startswith("sqlite"):
+            copy2(join(tmp_location, url[3]), url[3])
+    else:
+        move(new_location, os.getcwd())
+    repo.git.add(".")
+    repo.index.commit(message)
+    # Checkout the original branch.
+    previous.checkout()
+    LOGGER.info("Done.")
 
 
 @cli.command(context_settings=CONTEXT_SETTINGS)
@@ -285,7 +414,7 @@ def online(note, github_repository, github_username):
         repo = git.Repo()
     except git.InvalidGitRepositoryError:
         LOGGER.critical(
-            "The history requires a git repository in order to follow "
+            "'memote online' requires a git repository in order to follow "
             "the current branch's commit history.")
         sys.exit(1)
     password = getpass("GitHub Password: ")
@@ -305,13 +434,16 @@ def online(note, github_repository, github_username):
             "settings.".format(github_repository))
     except UnknownObjectException:
         gh_repo = user.create_repo(github_repository)
+    if note == "memote-ci access":
+        note = "{} to {}".format(note, github_repository)
     try:
         LOGGER.info("Creating token.")
         auth = user.create_authorization(scopes=["repo"], note=note)
     except GithubException:
         LOGGER.critical(
             "A personal access token with the note '{}' already exists. "
-            "Either delete it or choose another note.".format(note))
+            "Either delete it or choose another note using the option "
+            "'--note'.".format(note))
         sys.exit(1)
     try:
         LOGGER.info("Authorizing with TravisCI.")
@@ -341,29 +473,21 @@ def online(note, github_repository, github_username):
         sys.exit(1)
     LOGGER.info(
         "Encrypting GitHub token for repo '{}'.".format(gh_repo.full_name))
-    key = retrieve_public_key(gh_repo.full_name)
-    secret = encrypt_key(key, "GITHUB_TOKEN={}".format(auth.token).encode())
+    key = te.retrieve_public_key(gh_repo.full_name)
+    secret = te.encrypt_key(key, "GITHUB_TOKEN={}".format(auth.token).encode())
     LOGGER.info("Storing GitHub token in '.travis.yml'.")
-    with io.open(".travis.yml", "r") as file_h:
-        config = yaml.load(file_h, yaml.RoundTripLoader)
-    config["env"]["global"].append({"secure": secret})
-    with io.open(".travis.yml", "w") as file_h:
-        yaml.dump(config, file_h, Dumper=yaml.RoundTripDumper)
+    config = te.load_travis_configuration(".travis.yml")
+    global_env = config.setdefault("env", {}).get("global")
+    if global_env is None:
+        config["env"]["global"] = global_env = {}
+    try:
+        global_env["secure"] = secret
+    except TypeError:
+        global_env.append({"secure": secret})
+    te.dump_travis_configuration(config, ".travis.yml")
     repo.index.add([".travis.yml"])
     repo.index.commit("chore: add encrypted GitHub access token")
     repo.remotes.origin.push(all=True)
-
-
-@cli.command(context_settings=CONTEXT_SETTINGS)
-@click.help_option("--help", "-h")
-@click.argument("message")
-def save(message):
-    """
-    Save current model changes with the given message.
-
-    If a remote repository 'origin' exists the changes will also be uploaded.
-    """
-    raise NotImplementedError(u"Coming soon™.")
 
 
 cli.add_command(report)

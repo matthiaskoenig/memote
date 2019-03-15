@@ -29,20 +29,29 @@ class ConfigSectionSchema(object):
 
     @matches_section("memote")
     class Memote(SectionSchema):
-        """Describes the memote configuration keys and values."""
+        """
+        Describes the memote configuration keys and values.
+
+        Memote configuration should be carried out either in 'setup.cfg' or
+        a dedicated 'memote.ini' file.
+
+        """
 
         collect = Param(type=bool, default=True)
         git = Param(type=bool, default=True)
         addargs = Param(type=str, default="")
-        model = Param(type=click.Path(exists=True, dir_okay=False))
+        model = Param(type=click.Path(exists=False, dir_okay=False))
+        deployment = Param(type=str, default="gh-pages")
         location = Param(type=str)
         github_repository = Param(type=str)
         github_username = Param(type=str)
         exclusive = Param(type=str, multiple=True)
         skip = Param(type=str, multiple=True)
-        solver = Param(type=click.Choice(["cplex", "glpk", "gurobi"]),
-                       default="glpk")
-        experimental = Param(type=click.Path(exists=True, dir_okay=False),
+        solver = Param(
+            type=click.Choice(["cplex", "glpk", "gurobi", "glpk_exact"]),
+            default="glpk"
+        )
+        experimental = Param(type=click.Path(exists=False, dir_okay=False),
                              default=None)
 
 

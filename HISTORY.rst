@@ -3,6 +3,234 @@ History
 
 Next Release
 ------------
+* Update docstring of test_find_duplicate_reactions.
+* Add guidelines on writing custom tests to the documentation.
+
+0.9.6 (2019-03-06)
+------------------
+* The number of duplicated reactions is now reported uniquely rather than all
+  duplicate pairs.
+
+0.9.5 (2019-02-21)
+------------------
+* Add missing parametrized metric on ``test_biomass_open_production``.
+
+0.9.4 (2019-02-20)
+------------------
+* Add metrics, i.e., model-size independent test outcomes to almost all test
+  cases.
+* Repair auto generation of API docs and update section on test suite.
+
+0.9.3 (2019-01-30)
+------------------
+* Enhance the function for finding unique metabolites and make it more robust.
+* Improve logging output when there is a problem with serializing a result to
+  JSON.
+* Fix some test cases that got broken by cobrapy's new boundary identification.
+
+0.9.2 (2019-01-28)
+------------------
+* Fix bug that would lead to biomass SBO annotations not being reported.
+
+0.9.1 (2019-01-28)
+------------------
+* Add ``seed.reaction`` namespace to the reaction annotation databases.
+
+0.9.0 (2019-01-28)
+------------------
+* Change SBO annotation tests to check for multiple terms until we can properly
+  handle the ontology.
+* Remove 'Steady-state flux solution vectors' test case.
+* Improve the descriptions of stoichiometric matrix test cases.
+* Fix the discovery or orphan and dead-end metabolites.
+* Improve detection of metabolites that are not consumed or not produced by
+  only opening exchange reactions not other boundary reactions.
+* Thematically reorganize the test cases in the config.
+* Instead of min/max bounds consider the median bounds for testing (un-)bounded
+  fluxes.
+* Use a model context for every test case.
+* Fix bug which involved find_transport_reactions to ignore compartments.
+* Internal change to use model context rather than copy.
+* Internal changes to JSON structure.
+* Remove tests for metabolite inconsistency with closed bounds. The results
+  are a subset only of the unconserved metabolites.
+* Make the consistency tests account better for numeric instability.
+* Add the GLPK exact solver as a possible option.
+* Update memote-report-app from Angular 5.1.0 to 7.2.0.
+* Reduce the prominence of the total score in the reports.
+* Provide partial calculations for each section.
+* Show overall formula of how the total score is calculated.
+* Clearly indicate weights/ multipliers by introducing margenta badges next to each test in the report.
+* In the reports, improve the descriptions of the 'Help' section and rename this section to 'Readme'.
+* Rename the principal sections and include a brief explanation for each.
+* Fix bug that would show a test as 'Errored' although it only failed. Fixed by making condition in errorFailsafe
+  in test-result.model.ts more specific for cases where data is undefined or null.
+* Fix bug that would make parametrized tests disappear from the report if they had errored or if for some reason their 'data' attribute
+  was undefined.
+* Unpin pytest (require >= 4.0) and adjust some internal mechanics accordingly.
+* Display an alternative message if some biomass components do not contain a
+  formula.
+* Extend the annotations tests by a check for full length InChI strings.
+* Fix a bug in ``Unrealistic Growth Rate In Default Medium`` which reported the
+  opposite of what was the case.
+* Extend the description of each test by a description of how it is
+  implemented.
+* Refactor test that identifies duplicate reactions to take into metabolites,
+  reaction directionality and compartments into account.
+* Add additional tests that identify reactions having identical annotations and
+  identical genes.
+* Refactor test that identifies duplicate metabolites to use for inchi
+  strings in addition to inchikeys.
+* Round score to and display a single decimal value.
+* Fix bug that would show a test as errored whenever it was marked as skipped.
+* Read SBML files with modified parser that can collect the level, version and
+  whether the FBC package is used.
+* Validate the SBML structure with the libSBML python API if the parser errors
+  and produce a simple SBML validation report.
+* Add test cases that report on the level and version, and FBC availability
+  through the memote reports.
+
+0.8.11 (2019-01-07)
+-------------------
+* Temporarily pin pytest to <4.1 in order to avoid a breaking API change on their part.
+
+0.8.10 (2018-12-21)
+-------------------
+* Refactor the test for enzyme complexes to only return an estimated size.
+
+0.8.9 (2018-12-11)
+------------------
+* Compress JSON and SQLite storage of results using gzip by default. JSON 
+  continues to work either compressed or uncompressed. At the moment we 
+  offer no database migration, please contact us if you need help in 
+  migrating a large existing SQLite database rather than just re-computing it.
+
+0.8.8 (2018-12-10)
+------------------
+* Adjust the reversibility index test to not use name matching and increase 
+  the threshold slightly. Also adjust the description of the test.
+* Adjust tests to the change in the ``add_boundary`` interface.
+* Identify blocked reactions using the cobrapy built-in function.
+
+0.8.7 (2018-11-21)
+------------------
+* Add a feature to allow suppling a commit range to ``memote history``.
+* Add a test that checks if reactions are annotated with reactome identifiers.
+* Add a feature that allows identifying specific metabolites by matching
+  annotation information against the metabolite shortlist for a given MNX ID.
+* Change every usage of SBO key to lower case to conform to the identifiers.org 
+  namespace for the Systems Biology Ontology.
+* Remove that metabolite SBO terms are used when identifying transport 
+  reactions as this may lead to false positives.
+* Return metabolite IDs when finding duplicate metabolites to avoid 
+  serialization errors.
+* Identify transport reactions first by formula then by annotation.
+* For the diff report, run pytest in different processes to avoid accidentally
+  overwriting the results of the former with the results of the later runs.
+* In the diff report, fix a typo that allowed the diff button to depart the 
+  defined colour scheme (blue -> red) to cyan.
+* Fix the snapshot report not showing environment information.
+* Allow ``memote run`` to skip commits where the model was not
+  changed, if the flag ``--skip-unchanged`` is provided.
+* Fix the default value of the overall score to be zero instead of one and
+  make sure that the calculation is ensured with unit tests.
+* Fix medium and experiment loading
+* Add a test to check reaction directionality with thermodynamic estimation
+  from eQuilibrator API.
+
+0.8.6 (2018-09-13)
+------------------
+* Fix test titles and descriptions.
+
+0.8.5 (2018-08-20)
+------------------
+* Unpin cobra dependency and set it to >0.13.3.
+* Set ruamel.yaml to >=0.15 to keep up with cobra.
+
+0.8.4 (2018-07-18)
+------------------
+* Handle various pytest verbosity options better.
+* Improve ``memote new`` behavior.
+
+0.8.3 (2018-07-16)
+------------------
+* ``memote run`` in a repository now immediately commits the result to the
+  deployment branch.
+
+0.8.2 (2018-07-16)
+------------------
+* Allow running of ``memote history`` from any branch.
+* Let the history report only use commits where the model actually changed.
+* Proofread and update all docstrings and comments inside the ``memote``
+  subfolder.
+* Reworded all test titles to be a) shorter and b) as neutral as was
+  sensibly possible.
+* Reordered tests in the `test-config.yaml` such that results belonging to a
+  category are grouped logically.
+* Updated the documentation to include a newer flowchart, up-to-date getting
+  started and custom test sections.
+* Update code to account for breaking changes in the most recent version of 
+  cobrapy (0.13.0) and subsequently unpin cobrapy dependency (set to >=0.13.0).
+
+0.8.1 (2018-06-27)
+------------------
+* Allow users to selective recompute the history of results.
+* Skip commits in the history that did not change the model file.
+* Change format_type on experimental tests from `count` to `percent`
+* Fix typo in `test_basic.py` that lead to tests returning `null` which breaks
+  the diff report frontend.
+* Update the diff report to properly show errored and skipped tests
+* Fix issues with asynchronicity on the diff report.
+* Change format_type on experimental tests from ``count`` to ``percent``
+* Fix typo in ``test_basic.py`` that lead to tests returning `null` which
+  breaks the diff report frontend.
+* Update the diff report to properly show errored and skipped tests
+
+
+0.8.0 (2018-06-22)
+------------------
+* Finalize testing comparing with experimental data (growth and esentiality).
+* Temporarily disable ``test_find_inconsistent_min_stoichiometry``.
+* Update the nullspace function.
+* Improve optlang compatibility.
+* Add test ``find_medium_metabolites`` to detect and display all substrates
+  capable of being taken up by model
+* Display the score on History and Snapshot reports.
+* Invert the colour coding.
+* Display results as percentages.
+* Add ability to generate a diff report which compares two or more models.
+* Annotation of metabolite shortlist simplified.
+
+0.7.6 (2018-05-28)
+------------------
+* Refactor internal API and JSON object creation.
+
+0.7.5 (2018-05-25)
+------------------
+* Expose more of the internal API to the top level.
+* Also, remember to carry a towel!
+
+0.7.4 (2018-05-23)
+------------------
+* Add test ``find_duplicate_reactions`` to detect duplicate reactions in model
+* Add dynamic upper and lower bounds. They are based on the most extreme bound
+  values given in a model (if none exist -1000 and 1000 are chosen as defaults)
+* Fix logic in ``find_bounds`` function in ``helpers.py``
+
+0.7.3 (2018-05-23)
+------------------
+* Make the report type variable a string in the ``index.html``.
+
+0.7.2 (2018-05-22)
+------------------
+* Distribute the missing tests.
+
+0.7.1 (2018-05-16)
+------------------
+* Fix a problem with the report caused by previous refactoring.
+
+0.7.0 (2018-05-15)
+------------------
 
 * Remove the pip dependency in ``show_versions``.
 * Update the CI to use stages and ``tox-travis``.
@@ -28,6 +256,10 @@ Next Release
 * Add unit tests for ``matrix.py`` in file ``test_for_matrix.py``.
 * Add tests ``find_metabolites_not_produced_with_open_bounds`` and
   ``find_metabolites_not_consumed_with_open_bounds``
+* Add test ``find_duplicate_metabolites_in_compartments`` to detect duplicate
+  metabolites in identical compartments
+* Cache heavily used support functions in ``helpers.py`` and
+  ``consistency_helpers.py``
 
 0.6.2 (2018-03-12)
 ------------------
@@ -74,10 +306,12 @@ Next Release
   re-generate the shortlist
 * Add helper function ``find_met_in_model`` which looks up a query metabolite
   ID using the MNX namespace in the shortlist and:
+
     - If no compartment is provided, returns a list of all possible candidates
       metabolites.
     - If a compartment is provided, tries to return a list containing only
       ONE corresponding metabolite.
+
 * Add helper function ``find_compartment_id_in_model`` to identify
   compartments using an internal shortlist of possible compartment names.
 * Provide tests for each function
@@ -118,7 +352,7 @@ Next Release
   to the biomass reaction.
   The function is ``essential_precursors_not_in_biomass``
 * Record the score of individual test cases and sections in the result output.
-* Correct the import of module 'annotation' with 'sbo' in ``test_sbo`.py`
+* Correct the import of module 'annotation' with 'sbo' in ``test_sbo.py``
 * Refactor sink_react_list to sink_reactions for improved readability
 * Allow ``test_sink_specific_sbo_presence`` to be skipped when no sink reactions
   are present with a metric of 1.0

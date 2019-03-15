@@ -37,6 +37,7 @@ LOGGER = logging.getLogger(__name__)
 # 'Kegg'        ['gen','rxn','met'] 'http://www.kegg.jp/'
 # 'SEED'        ['met']             'http://modelseed.org/'
 #
+# 'InChI'       ['met']     'https://www.ebi.ac.uk/chebi/'
 # 'InChIKey'    ['met']     'http://cactus.nci.nih.gov/chemical/structure'
 # 'ChEBI'       ['met']     'http://bioportal.bioontology.org/ontologies/CHEBI'
 # 'BRENDA'      ['rxn']     'http://www.brenda-enzymes.org/'
@@ -44,7 +45,7 @@ LOGGER = logging.getLogger(__name__)
 # 'HMDB'        ['met']     'http://www.hmdb.ca/'
 #
 # 'BioCyc'      ['rxn','met']   'http://biocyc.org'
-# 'Reactome'    ['met']         'http://www.reactome.org/'
+# 'Reactome'    ['rxn','met']   'http://www.reactome.org/'
 # 'BiGG'        ['rxn','met']   'http://bigg.ucsd.edu/universal/'
 # 'PubChem'     ['met']         'https://pubchem.ncbi.nlm.nih.gov/'
 # 'RefSeq'      ['gen']         'http://www.ncbi.nlm.nih.gov/projects/RefSeq/'
@@ -69,7 +70,7 @@ GENE_PRODUCT_ANNOTATIONS = OrderedDict([
         r"[0-9][A-Z, 0-9][A-Z, 0-9][A-Z, 0-9]"
         r"[0-9])(\.\d+)?$")),
     ('ecogene', re.compile(r"^EG\d+$")),
-    ('kegg.gene', re.compile(r"^\w+:[\w\d\.-]*$")),
+    ('kegg.genes', re.compile(r"^\w+:[\w\d\.-]*$")),
     ('ncbigi', re.compile(r"^(GI|gi)\:\d+$")),
     ('ncbigene', re.compile(r"^\d+$")),
     ('ncbiprotein', re.compile(r"^(\w+\d+(\.\d+)?)|(NP_\d+)$")),
@@ -82,8 +83,11 @@ GENE_PRODUCT_ANNOTATIONS = OrderedDict([
 REACTION_ANNOTATIONS = OrderedDict([
     ('rhea', re.compile(r"^\d{5}$")),
     ('kegg.reaction', re.compile(r"^R\d+$")),
+    ('seed.reaction', re.compile(r"^rxn\d+$")),
     ('metanetx.reaction', re.compile(r"^MNXR\d+$")),
     ('bigg.reaction', re.compile(r"^[a-z_A-Z0-9]+$")),
+    ('reactome', re.compile(
+        r"(^R-[A-Z]{3}-[0-9]+(-[0-9]+)?$)|(^REACT_\d+(\.\d+)?$)")),
     ('ec-code', re.compile(
         r"^\d+\.-\.-\.-|\d+\.\d+\.-\.-|"
         r"\d+\.\d+\.\d+\.-|"
@@ -104,6 +108,9 @@ METABOLITE_ANNOTATIONS = OrderedDict([
     ('seed.compound', re.compile(r"^cpd\d+$")),
     ('inchikey', re.compile(
         r"^[A-Z]{14}\-[A-Z]{10}(\-[A-Z])?")),
+    ('inchi', re.compile(
+        r"^InChI\=1S?\/[A-Za-z0-9\.]+(\+[0-9]+)?"
+        r"(\/[cnpqbtmsih][A-Za-z0-9\-\+\(\)\,\/\?\;\.]+)*$")),
     ('chebi', re.compile(r"^CHEBI:\d+$")),
     ('hmdb', re.compile(r"^HMDB\d{5}$")),
     ('reactome', re.compile(
@@ -192,7 +199,8 @@ def generate_component_annotation_miriam_match(elements, component, db):
 
     pattern = {
         "metabolites": METABOLITE_ANNOTATIONS,
-        "reactions": REACTION_ANNOTATIONS
+        "reactions": REACTION_ANNOTATIONS,
+        "genes": GENE_PRODUCT_ANNOTATIONS
     }[component][db]
     return [elem for elem in elements
             if is_faulty(elem.annotation, db, pattern)]
@@ -219,7 +227,8 @@ def generate_component_id_namespace_overview(model, components):
     """
     patterns = {
         "metabolites": METABOLITE_ANNOTATIONS,
-        "reactions": REACTION_ANNOTATIONS
+        "reactions": REACTION_ANNOTATIONS,
+        "genes": GENE_PRODUCT_ANNOTATIONS
     }[components]
     databases = list(patterns)
     data = list()

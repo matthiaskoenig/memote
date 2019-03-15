@@ -20,14 +20,15 @@
 from __future__ import absolute_import, division
 
 import pytest
+from cobra.flux_analysis import find_blocked_reactions
 
 import memote.support.consistency as consistency
 from memote.utils import annotate, truncate, get_ids, wrapper
 import memote.support.consistency_helpers as con_helpers
 
 
-@annotate(title="Stoichiometric Consistency", type="count")
-def test_stoichiometric_consistency(read_only_model):
+@annotate(title="Stoichiometric Consistency", format_type="count")
+def test_stoichiometric_consistency(model):
     """
     Expect that the stoichiometry is consistent.
 
@@ -39,18 +40,23 @@ def test_stoichiometric_consistency(read_only_model):
     Similar to insufficient constraints, this may give rise to cycles which
     either produce mass from nothing or consume mass from the model.
 
-    This test uses an implementation of the algorithm presented by
-    Gevorgyan, A., M. G Poolman, and D. A Fell.
+    Implementation:
+    This test first uses an implementation of the algorithm presented in
+    section 3.1 by Gevorgyan, A., M. G Poolman, and D. A Fell.
     "Detection of Stoichiometric Inconsistencies in Biomolecular Models."
     Bioinformatics 24, no. 19 (2008): 2245.
     doi: 10.1093/bioinformatics/btn425
+    Should the model be inconsistent, then the list of unconserved metabolites
+    is computed using the algorithm described in section 3.2 of the same
+    publication.
+
     """
     ann = test_stoichiometric_consistency.annotation
     is_consistent = consistency.check_stoichiometric_consistency(
-        read_only_model)
+        model)
     ann["data"] = [] if is_consistent else get_ids(
-        consistency.find_unconserved_metabolites(read_only_model))
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+        consistency.find_unconserved_metabolites(model))
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """This model contains {} ({:.2%}) unconserved
         metabolites: {}""".format(
@@ -59,9 +65,9 @@ def test_stoichiometric_consistency(read_only_model):
 
 
 @pytest.mark.parametrize("met", [x for x in consistency.ENERGY_COUPLES])
-@annotate(title="Erroneous Energy-generating Cycles", type="count",
-          data=dict(), message=dict())
-def test_detect_energy_generating_cycles(read_only_model, met):
+@annotate(title="Erroneous Energy-generating Cycles", format_type="count",
+          data=dict(), message=dict(), metric=dict())
+def test_detect_energy_generating_cycles(model, met):
     u"""
     Expect that no energy metabolite can be produced out of nothing.
 
@@ -73,18 +79,27 @@ def test_detect_energy_generating_cycles(read_only_model, met):
     which makes studies involving the growth rates predicted from such models
     unreliable.
 
+    Implementation:
     This test uses an implementation of the algorithm presented by:
     Fritzemeier, C. J., Hartleb, D., Szappanos, B., Papp, B., & Lercher,
     M. J. (2017). Erroneous energy-generating cycles in published genome scale
     metabolic networks: Identification and removal. PLoS Computational
     Biology, 13(4), 1–14. http://doi.org/10.1371/journal.pcbi.1005494
+
+    First attempt to identify the main compartment (cytosol), then attempt to
+    identify each metabolite of the referenced list of energy couples via an
+    internal mapping table. Construct a dissipation reaction for each couple.
+    Carry out FBA with each dissipation reaction as the objective and report
+    those reactions that non-zero carry flux.
+
     """
     ann = test_detect_energy_generating_cycles.annotation
-    if met not in read_only_model.metabolites:
+    if met not in model.metabolites:
         pytest.skip("This test has been skipped since metabolite {} could "
                     "not be found in the model.".format(met))
-    ann["data"][met] = consistency.detect_energy_generating_cycles(
-        read_only_model, met)
+    ann["data"][met] = consistency.detect_energy_generating_cycles(model, met)
+    # Report the number of cycles scaled by the number of reactions.
+    ann["metric"][met] = len(ann["data"][met]) / len(model.reactions)
     ann["message"][met] = wrapper.fill(
         """The model can produce '{}' without requiring resources. This is
         caused by improperly constrained reactions leading to erroneous
@@ -94,8 +109,8 @@ def test_detect_energy_generating_cycles(read_only_model, met):
     assert len(ann["data"][met]) == 0, ann["message"][met]
 
 
-@annotate(title="Number of Charge-Imbalanced Reactions", type="count")
-def test_reaction_charge_balance(read_only_model):
+@annotate(title="Charge Balance", format_type="count")
+def test_reaction_charge_balance(model):
     """
     Expect all reactions to be charge balanced.
 
@@ -104,13 +119,19 @@ def test_reaction_charge_balance(read_only_model):
     least one metabolite does not have a charge defined.
 
     In steady state, for each metabolite the sum of influx equals the sum
-    of outflux. Hence the net charges of both sides of any model reaction have
+    of efflux. Hence the net charges of both sides of any model reaction have
     to be equal. Reactions where at least one metabolite does not have a
-    formula are not considered to be balanced, even though the remaining
+    charge are not considered to be balanced, even though the remaining
     metabolites participating in the reaction might be.
+
+    Implementation:
+    For each reaction that isn't a boundary or biomass reaction check if each
+    metabolite has a non-zero charge attribute and if so calculate if the
+    overall sum of charges of reactants and products is equal to zero.
+
     """
     ann = test_reaction_charge_balance.annotation
-    internal_rxns = con_helpers.get_internals(read_only_model)
+    internal_rxns = con_helpers.get_internals(model)
     ann["data"] = get_ids(
         consistency.find_charge_unbalanced_reactions(internal_rxns))
     ann["metric"] = len(ann["data"]) / len(internal_rxns)
@@ -122,8 +143,8 @@ def test_reaction_charge_balance(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Mass-Unbalanced Reactions", type="count")
-def test_reaction_mass_balance(read_only_model):
+@annotate(title="Mass Balance", format_type="count")
+def test_reaction_mass_balance(model):
     """
     Expect all reactions to be mass balanced.
 
@@ -132,13 +153,19 @@ def test_reaction_mass_balance(read_only_model):
     least one metabolite does not have a formula defined.
 
     In steady state, for each metabolite the sum of influx equals the sum
-    of outflux. Hence the net masses of both sides of any model reaction have
+    of efflux. Hence the net masses of both sides of any model reaction have
     to be equal. Reactions where at least one metabolite does not have a
-    charge are not considered to be balanced, even though the remaining
+    formula are not considered to be balanced, even though the remaining
     metabolites participating in the reaction might be.
+
+    Implementation:
+    For each reaction that isn't a boundary or biomass reaction check if each
+    metabolite has a non-zero elements attribute and if so calculate if the
+    overall element balance of reactants and products is equal to zero.
+
     """
     ann = test_reaction_mass_balance.annotation
-    internal_rxns = con_helpers.get_internals(read_only_model)
+    internal_rxns = con_helpers.get_internals(model)
     ann["data"] = get_ids(
         consistency.find_mass_unbalanced_reactions(internal_rxns)
     )
@@ -151,8 +178,8 @@ def test_reaction_mass_balance(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Universally Blocked Reactions", type="count")
-def test_blocked_reactions(read_only_model):
+@annotate(title="Universally Blocked Reactions", format_type="count")
+def test_blocked_reactions(model):
     """
     Expect all reactions to be able to carry flux in complete medium.
 
@@ -160,12 +187,19 @@ def test_blocked_reactions(read_only_model):
     Analysis cannot carry any flux while all model boundaries are open.
     Generally blocked reactions are caused by network gaps, which can be
     attributed to scope or knowledge gaps.
+
+    Implementation:
+    Use flux variability analysis (FVA) implemented in
+    cobra.flux_analysis.find_blocked_reactions with open_exchanges=True.
+    Please refer to the cobrapy documentation for more information:
+    https://cobrapy.readthedocs.io/en/stable/autoapi/cobra/flux_analysis/
+    variability/index.html#cobra.flux_analysis.variability.
+    find_blocked_reactions
+
     """
     ann = test_blocked_reactions.annotation
-    ann["data"] = get_ids(
-        consistency.find_universally_blocked_reactions(read_only_model)
-    )
-    ann["metric"] = len(ann["data"]) / len(read_only_model.reactions)
+    ann["data"] = find_blocked_reactions(model, open_exchanges=True)
+    ann["metric"] = len(ann["data"]) / len(model.reactions)
     ann["message"] = wrapper.fill(
         """There are {} ({:.2%}) blocked reactions in
         the model: {}""".format(
@@ -173,19 +207,23 @@ def test_blocked_reactions(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Stoichiometrically Balanced Cycles", type="count")
-def test_find_stoichiometrically_balanced_cycles(read_only_model):
+@annotate(title="Stoichiometrically Balanced Cycles", format_type="count")
+def test_find_stoichiometrically_balanced_cycles(model):
     """
     Expect no stoichiometrically balanced loops to be present.
 
     Stoichiometrically Balanced Cycles are artifacts of insufficiently
     constrained networks resulting in reactions that can carry flux when
     all the boundaries have been closed.
+
+    Implementation:
+    Close all model boundary reactions and then use flux variability analysis
+    (FVA) to identify reactions that carry flux.
+
     """
     ann = test_find_stoichiometrically_balanced_cycles.annotation
-    ann["data"] = consistency.find_stoichiometrically_balanced_cycles(
-        read_only_model)
-    ann["metric"] = len(ann["data"]) / len(read_only_model.reactions)
+    ann["data"] = consistency.find_stoichiometrically_balanced_cycles(model)
+    ann["metric"] = len(ann["data"]) / len(model.reactions)
     ann["message"] = wrapper.fill(
         """There are {} ({:.2%}) reactions
         which participate in SBC in the model: {}""".format(
@@ -193,17 +231,24 @@ def test_find_stoichiometrically_balanced_cycles(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Orphan Metabolites", type="count")
-def test_find_orphans(read_only_model):
+@annotate(title="Orphan Metabolites", format_type="count")
+def test_find_orphans(model):
     """
     Expect no orphans to be present.
 
     Orphans are metabolites that are only consumed but not produced by
-    reactions in the model. They may indicate the presence of network gaps.
+    reactions in the model. They may indicate the presence of network and
+    knowledge gaps.
+
+    Implementation:
+    Find orphan metabolites structurally by considering only reaction
+    equations and reversibility. FBA is not carried out.
+
+
     """
     ann = test_find_orphans.annotation
-    ann["data"] = get_ids(consistency.find_orphans(read_only_model))
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+    ann["data"] = get_ids(consistency.find_orphans(model))
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """A total of {} ({:.2%}) metabolites are not produced by any reaction
         of the model: {}""".format(
@@ -211,17 +256,23 @@ def test_find_orphans(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Dead-end Metabolites", type="count")
-def test_find_deadends(read_only_model):
+@annotate(title="Dead-end Metabolites", format_type="count")
+def test_find_deadends(model):
     """
     Expect no dead-ends to be present.
 
     Dead-ends are metabolites that can only be produced but not consumed by
-    reactions in the model. They may indicate the presence of network gaps.
+    reactions in the model. They may indicate the presence of network and
+    knowledge gaps.
+
+    Implementation:
+    Find dead-end metabolites structurally by considering only reaction
+    equations and reversibility. FBA is not carried out.
+
     """
     ann = test_find_deadends.annotation
-    ann["data"] = get_ids(consistency.find_deadends(read_only_model))
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+    ann["data"] = get_ids(consistency.find_deadends(model))
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """A total of {} ({:.2%}) metabolites are not consumed by any reaction
         of the model: {}""".format(
@@ -229,18 +280,23 @@ def test_find_deadends(read_only_model):
     assert ann["data"] == 0, ann["message"]
 
 
-@annotate(title="Number of Disconnected Metabolites", type="count")
-def test_find_disconnected(read_only_model):
+@annotate(title="Metabolite Connectivity", format_type="count")
+def test_find_disconnected(model):
     """
     Expect no disconnected metabolites to be present.
 
     Disconnected metabolites are not part of any reaction in the model. They
     are most likely left-over from the reconstruction process, but may also
-    point to network gaps.
+    point to network and knowledge gaps.
+
+    Implementation:
+    Check for any metabolites of the cobra.Model object with emtpy reaction
+    attribute.
+
     """
     ann = test_find_disconnected.annotation
-    ann["data"] = get_ids(consistency.find_disconnected(read_only_model))
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+    ann["data"] = get_ids(consistency.find_disconnected(model))
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """A total of {} ({:.2%}) metabolites are not associated with any
         reaction of the model: {}""".format(
@@ -248,79 +304,30 @@ def test_find_disconnected(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Metabolites Produced Without Substrate Consumption",
-          type="count")
-def test_find_metabolites_produced_with_closed_bounds(read_only_model):
+@annotate(title="Metabolite Production In Complete Medium",
+          format_type="count")
+def test_find_metabolites_not_produced_with_open_bounds(model):
     """
-    Expect no metabolites to be produced without substrate consumption.
+    Expect metabolites to be producible in complete medium.
 
-    It should not be possible for the model to produce metabolites without
-    consuming substrate from the medium. This test disables all the boundary
-    reactions and checks if each metabolite can be produced individually
-    using flux balance analysis. To pass this test no metabolite outside of
-    specific boundary reactions should be produced without the consumption of
-    substrate.
-    """
-    ann = test_find_metabolites_produced_with_closed_bounds.annotation
-    ann["data"] = get_ids(
-        consistency.find_metabolites_produced_with_closed_bounds(
-            read_only_model
-        )
-    )
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
-    ann["message"] = wrapper.fill(
-        """A total of {} ({:.2%}) metabolites can be produced without the model
-        needing to consume any substrate: {}""".format(
-            len(ann["data"]), ann["metric"], truncate(ann["data"])))
-    assert len(ann["data"]) == 0, ann["message"]
+    In complete medium, a model should be able to divert flux to every
+    metabolite. This test opens all the boundary reactions i.e. simulates a
+    complete medium and checks if any metabolite cannot be produced
+    individually using flux balance analysis. Metabolites that cannot be
+    produced this way are likely orphan metabolites, downstream of reactions
+    with fixed constraints, or blocked by a cofactor imbalance. To pass this
+    test all metabolites should be producible.
 
+    Implementation:
+    Open all model boundary reactions, then for each metabolite in the model
+    add a boundary reaction and maximize it with FBA.
 
-@annotate(title="Number of Metabolites Consumed Without Product Removal",
-          type="count")
-def test_find_metabolites_consumed_with_closed_bounds(read_only_model):
-    """
-    Expect no metabolites to be consumed without product removal.
-
-    Just like metabolites should not be produced from nothing, mass should
-    not simply be removed from the model. This test disables all the
-    boundary reactions and checks if each metabolite can be consumed
-    individually using flux balance analysis. To pass this test no
-    metabolite outside of specific boundary reactions should be consumed
-    without product leaving the system.
-    """
-    ann = test_find_metabolites_consumed_with_closed_bounds.annotation
-    ann["data"] = get_ids(
-        consistency.find_metabolites_consumed_with_closed_bounds(
-            read_only_model
-        )
-    )
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
-    ann["message"] = wrapper.fill(
-        """A total of {} ({:.2%}) metabolites can be consumed without
-        using the system's boundary reactions: {}""".format(
-            len(ann["data"]), ann["metric"], truncate(ann["data"])))
-    assert len(ann["data"]) == 0, ann["message"]
-
-
-@annotate(title="Number of Metabolites Not Produced In Complete Medium",
-          type="count")
-def test_find_metabolites_not_produced_with_open_bounds(read_only_model):
-    """
-    Expect no metabolites to be unproducible in complete medium.
-
-    It should not be possible for the model to not produce metabolites in
-    complete medium. This test enables all the boundary reactions and checks
-    if each metabolite is incapable of being produced individually using flux
-    balance analysis. To pass this test no metabolite outside of
-    specific boundary reactions should be unproducible in complete medium.
     """
     ann = test_find_metabolites_not_produced_with_open_bounds.annotation
     ann["data"] = get_ids(
-        consistency.find_metabolites_not_produced_with_open_bounds(
-            read_only_model
-        )
+        consistency.find_metabolites_not_produced_with_open_bounds(model)
     )
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """A total of {} ({:.2%}) metabolites cannot be produced in complete
         medium: {}""".format(
@@ -328,26 +335,30 @@ def test_find_metabolites_not_produced_with_open_bounds(read_only_model):
     assert len(ann["data"]) == 0, ann["message"]
 
 
-@annotate(title="Number of Metabolites Not Consumed In Complete Medium",
-          type="count")
-def test_find_metabolites_not_consumed_with_open_bounds(read_only_model):
+@annotate(title="Metabolite Consumption In Complete Medium",
+          format_type="count")
+def test_find_metabolites_not_consumed_with_open_bounds(model):
     """
-    Expect no metabolites to be inconsumable in complete medium.
+    Expect metabolites to be consumable in complete medium.
 
-    Just like metabolites should not be unproducible in complete medium,
-    they also should not be incapable of being consumed in complete medium.
-    This test enables all the boundary reactions and checks if each metabolite
-    is incapble of being consumed individually using flux balance analysis. To
-    pass this test no metabolite outside of specific boundary reactions should
-    be inconsumable in complete medium.
+    In complete medium, a model should be able to divert flux from every
+    metabolite. This test opens all the boundary reactions i.e. simulates a
+    complete medium and checks if any metabolite cannot be consumed
+    individually using flux balance analysis. Metabolites that cannot be
+    consumed this way are likely dead-end metabolites or upstream of reactions
+    with fixed constraints. To pass this test all metabolites should be
+    consumable.
+
+    Implementation:
+    Open all model boundary reactions, then for each metabolite in the model
+    add a boundary reaction and minimize it with FBA.
+
     """
     ann = test_find_metabolites_not_consumed_with_open_bounds.annotation
     ann["data"] = get_ids(
-        consistency.find_metabolites_not_consumed_with_open_bounds(
-            read_only_model
-        )
+        consistency.find_metabolites_not_consumed_with_open_bounds(model)
     )
-    ann["metric"] = len(ann["data"]) / len(read_only_model.metabolites)
+    ann["metric"] = len(ann["data"]) / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """A total of {} ({:.2%}) metabolites cannot be consumed in complete
         medium: {}""".format(
@@ -356,30 +367,34 @@ def test_find_metabolites_not_consumed_with_open_bounds(read_only_model):
 
 
 @annotate(
-    title="Fraction of Unbounded Reactions in the Default Condition",
-    type="percent")
-def test_find_reactions_unbounded_flux_default_condition(read_only_model):
+    title="Unbounded Flux In Default Medium",
+    format_type="percent")
+def test_find_reactions_unbounded_flux_default_condition(model):
     """
     Expect the fraction of unbounded reactions to be low.
 
     A large fraction of model reactions able to carry unlimited flux under
     default conditions indicates problems with reaction directionality,
     missing cofactors, incorrectly defined transport reactions and more.
+
+    Implementation:
+    Without changing the default constraints run flux variability analysis.
+    From the FVA results identify those reactions that carry flux equal to the
+    model's maximal or minimal flux.
+
     """
-    # TODO: Arbitrary threshold right now! Update after meta study!
     ann = test_find_reactions_unbounded_flux_default_condition.annotation
-    unbounded_rxns, fraction, _ = \
-        consistency.find_reactions_with_unbounded_flux_default_condition(
-            read_only_model
-        )
-    ann["data"] = get_ids(unbounded_rxns)
+    unbounded_rxn_ids, fraction, _ = \
+        consistency.find_reactions_with_unbounded_flux_default_condition(model)
+    ann["data"] = unbounded_rxn_ids
     ann["metric"] = fraction
     ann["message"] = wrapper.fill(
         """ A fraction of {:.2%} of the non-blocked reactions (in total {}
         reactions) can carry unbounded flux in the default model
         condition. Unbounded reactions may be involved in
         thermodynamically infeasible cycles: {}""".format(
-            len(ann["data"]), ann["metric"], truncate(ann["data"])
+            ann["metric"], len(ann["data"]), truncate(ann["data"])
         )
     )
+    # TODO: Arbitrary threshold right now! Update after meta study!
     assert ann["metric"] <= 0.1, ann["message"]

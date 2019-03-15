@@ -27,6 +27,8 @@ import sympy
 from numpy.linalg import svd
 from six import iteritems, itervalues
 from builtins import zip, dict
+from pylru import lrudecorator
+from optlang.symbolics import add
 
 from memote.support.helpers import find_biomass_reaction
 
@@ -52,12 +54,12 @@ def add_reaction_constraints(model, reactions, Constraint):
         The constraint class for the specific interface.
 
     """
+    constraints = []
     for rxn in reactions:
-        expression = sympy.Add(
-            *[coefficient * model.variables[metabolite.id]
-              for (metabolite, coefficient) in rxn.metabolites.items()])
-        constraint = Constraint(expression, lb=0, ub=0, name=rxn.id)
-        model.add(constraint)
+        expression = add(
+            [c * model.variables[m.id] for m, c in rxn.metabolites.items()])
+        constraints.append(Constraint(expression, lb=0, ub=0, name=rxn.id))
+    model.add(constraints)
 
 
 def stoichiometry_matrix(metabolites, reactions):
@@ -95,33 +97,38 @@ def stoichiometry_matrix(metabolites, reactions):
     return matrix, met_index, rxn_index
 
 
-def rank(stoichiometry_matrix, atol=1e-13, rtol=0):
+def rank(matrix, atol=1e-13, rtol=0):
     """
-    Estimate the rank, i.e. the dimension of the column space, of a matrix.
+    Estimate the rank, i.e., the dimension of the column space, of a matrix.
 
     The algorithm used by this function is based on the singular value
     decomposition of `stoichiometry_matrix`.
 
     Parameters
     ----------
-    stoichiometry_matrix : ndarray
-        stoichiometry_matrix should be at most 2-D.  A 1-D array with length n
-        will be treated as a 2-D with shape (1, n)
+    matrix : ndarray
+        The matrix should be at most 2-D.  A 1-D array with length k
+        will be treated as a 2-D with shape (1, k)
     atol : float
         The absolute tolerance for a zero singular value.  Singular values
-        smaller than `atol` are considered to be zero.
+        smaller than ``atol`` are considered to be zero.
     rtol : float
-        The relative tolerance.  Singular values less than rtol*smax are
-        considered to be zero, where smax is the largest singular value.
+        The relative tolerance for a zero singular value.  Singular values less
+        than the relative tolerance times the largest singular value are
+        considered to be zero.
 
+    Notes
+    -----
     If both `atol` and `rtol` are positive, the combined tolerance is the
     maximum of the two; that is::
+
         tol = max(atol, rtol * smax)
-    Singular values smaller than `tol` are considered to be zero.
+
+    Singular values smaller than ``tol`` are considered to be zero.
 
     Returns
     -------
-    rank : int
+    int
         The estimated rank of the matrix.
 
     See Also
@@ -131,19 +138,50 @@ def rank(stoichiometry_matrix, atol=1e-13, rtol=0):
         provide the option of the absolute tolerance.
 
     """
-    stoichiometry_matrix = np.atleast_2d(stoichiometry_matrix)
-    s = svd(stoichiometry_matrix, compute_uv=False)
-    tol = max(atol, rtol * s[0])
-    rank = int((s >= tol).sum())
-    return rank
+    matrix = np.atleast_2d(matrix)
+    sigma = svd(matrix, compute_uv=False)
+    tol = max(atol, rtol * sigma[0])
+    return int((sigma >= tol).sum())
 
 
-def nullspace(matrix, atol=1e-13, rtol=0.0):
+def nullspace(matrix, atol=1e-13, rtol=0.0):  # noqa: D402
     """
-    Compute the nullspace of a 2D `numpy.array`.
+    Compute an approximate basis for the null space (kernel) of a matrix.
+
+    The algorithm used by this function is based on the singular value
+    decomposition of the given matrix.
+
+    Parameters
+    ----------
+    matrix : ndarray
+        The matrix should be at most 2-D.  A 1-D array with length k
+        will be treated as a 2-D with shape (1, k)
+    atol : float
+        The absolute tolerance for a zero singular value.  Singular values
+        smaller than ``atol`` are considered to be zero.
+    rtol : float
+        The relative tolerance for a zero singular value.  Singular values less
+        than the relative tolerance times the largest singular value are
+        considered to be zero.
 
     Notes
     -----
+    If both `atol` and `rtol` are positive, the combined tolerance is the
+    maximum of the two; that is::
+
+        tol = max(atol, rtol * smax)
+
+    Singular values smaller than ``tol`` are considered to be zero.
+
+    Returns
+    -------
+    ndarray
+        If ``matrix`` is an array with shape (m, k), then the returned
+        nullspace will be an array with shape ``(k, n)``, where n is the
+        estimated dimension of the nullspace.
+
+    References
+    ----------
     Adapted from:
     https://scipy.github.io/old-wiki/pages/Cookbook/RankNullspace.html
 
@@ -151,56 +189,11 @@ def nullspace(matrix, atol=1e-13, rtol=0.0):
     matrix = np.atleast_2d(matrix)
     _, sigma, vh = svd(matrix)
     tol = max(atol, rtol * sigma[0])
-    return np.compress(sigma < tol, vh, axis=0).T
+    num_nonzero = (sigma >= tol).sum()
+    return vh[num_nonzero:].conj().T
 
 
-def nullspace_basis(stoichiometry_matrix, atol=1e-13, rtol=0):
-    """
-    Compute an approximate basis for the nullspace of a matrix.
-
-    The algorithm used by this function is based on the singular value
-    decomposition of `stoichiometry_matrix`.
-
-    Parameters
-    ----------
-    stoichiometry_matrix : ndarray
-        stoichiometry_matrix should be at most 2-D.  A 1-D array with length k
-        will be treated as a 2-D with shape (1, k)
-    atol : float
-        The absolute tolerance for a zero singular value.  Singular values
-        smaller than `atol` are considered to be zero.
-    rtol : float
-        The relative tolerance.  Singular values less than rtol*smax are
-        considered to be zero, where smax is the largest singular value.
-
-    If both `atol` and `rtol` are positive, the combined tolerance is the
-    maximum of the two; that is::
-        tol = max(atol, rtol * smax)
-    Singular values smaller than `tol` are considered to be zero.
-
-    Returns
-    -------
-    ns : ndarray
-        If `stoichiometry_matrix` is an array with shape (m, k), then `ns` will
-        be an array with shape (k, n), where n is the estimated dimension of
-        the nullspace of `A`.  The columns of `ns` are a basis for the
-        nullspace; each element in numpy.dot(A, ns) will be approximately
-        zero.
-
-    Notes
-    -----
-    Adapted from:
-    https://scipy.github.io/old-wiki/pages/Cookbook/RankNullspace.html
-
-    """
-    stoichiometry_matrix = np.atleast_2d(stoichiometry_matrix)
-    u, s, vh = svd(stoichiometry_matrix)
-    tol = max(atol, rtol * s[0])
-    nnz = (s >= tol).sum()
-    ns = vh[nnz:].conj().T
-    return ns
-
-
+@lrudecorator(size=2)
 def get_interface(model):
     """
     Return the interface specific classes.
@@ -219,11 +212,12 @@ def get_interface(model):
     )
 
 
+@lrudecorator(size=2)
 def get_internals(model):
     """
-    Return non-exchange reactions and their metabolites.
+    Return non-boundary reactions and their metabolites.
 
-    Exchange reactions are unbalanced by their nature. They are excluded here
+    Boundary reactions are unbalanced by their nature. They are excluded here
     and only the metabolites of the others are considered.
 
     Parameters
@@ -234,9 +228,9 @@ def get_internals(model):
     """
     biomass = set(find_biomass_reaction(model))
     if len(biomass) == 0:
-        LOGGER.warn("No biomass reaction detected. Consistency test results "
-                    "are unreliable if one exists.")
-    return set(model.reactions) - (set(model.exchanges) | biomass)
+        LOGGER.warning("No biomass reaction detected. Consistency test results "
+                       "are unreliable if one exists.")
+    return set(model.reactions) - (set(model.boundary) | biomass)
 
 
 def create_milp_problem(kernel, metabolites, Model, Variable, Constraint,

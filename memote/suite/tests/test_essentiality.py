@@ -30,35 +30,43 @@ import pytest
 from memote.utils import annotate, wrapper
 from memote.support.essentiality import confusion_matrix
 
-ESSENTIALITY_DATA = list(pytest.memote.experimental.essentiality)
 
-
-@pytest.mark.parametrize("experiment", ESSENTIALITY_DATA)
-@annotate(title="Gene Essentiality Prediction", type="number", data=dict(),
-          message=dict(), metric=dict())
+@pytest.mark.essentiality
+@annotate(title="Gene Essentiality Prediction", format_type="percent",
+          data=dict(), message=dict(), metric=dict())
 def test_gene_essentiality_from_data_qualitative(model, experiment,
-                                                 threshold=0.8):
+                                                 threshold=0.95):
     """
-    Expect a perfect Matthew's coefficient.
+    Expect a perfect accuracy when predicting gene essentiality.
 
-    The in-silico gene essentiality prediction is compared with experimental
-    data and the Matthew's coefficient is used as a metric.
+    The in-silico gene essentiality is compared with experimental
+    data and the accuracy is expected to be better than 0.95.
+    In principal, Matthews' correlation coefficient is a more comprehensive
+    metric but is a little fragile to not having any false negatives or false
+    positives in the output.
+
+    Implementation:
+    Read and validate experimental config file and data tables. Constrain the
+    model with the parameters provided by a user's definition of the medium,
+    then compute a confusion matrix based on the predicted essential, expected
+    essential, predicted nonessential and expected nonessential genes.
+    The individual values of the confusion matrix are calculated as described
+    in https://en.wikipedia.org/wiki/Confusion_matrix
+
     """
     ann = test_gene_essentiality_from_data_qualitative.annotation
     exp = pytest.memote.experimental.essentiality[experiment]
     expected = exp.data
     test = exp.evaluate(model)
-    test["gene"] = test.index
     ann["data"][experiment] = confusion_matrix(
         set(test.loc[test["essential"], "gene"]),
         set(expected.loc[expected["essential"], "gene"]),
         set(test.loc[~test["essential"], "gene"]),
         set(expected.loc[~expected["essential"], "gene"])
     )
-    ann["metric"][experiment] = ann["data"][experiment]["MCC"]
+    ann["metric"][experiment] = ann["data"][experiment]["ACC"]
     ann["message"][experiment] = wrapper.fill(
-        """Ideally, every model would show a perfect Matthews correlation
-        coefficient of 1. In experiment '{}' the model has a coefficient
-        of {:.2}.""".format(experiment, ann["data"][experiment]["MCC"])
-    )
-    assert ann["data"][experiment]["MCC"] > threshold
+        """Ideally, every model would show a perfect accuracy of 1. In
+        experiment '{}' the model has  {:.2}.""".format(
+            experiment, ann["data"][experiment]["MCC"]))
+    assert ann["data"][experiment]["ACC"] > threshold

@@ -23,20 +23,26 @@ import memote.support.matrix as matrix
 from memote.utils import annotate, wrapper
 
 
-@annotate(title="Ratio between largest and smallest non-zero coefficients",
-          type="percent")
+@annotate(title="Ratio Min/Max Non-Zero Coefficients",
+          format_type="percent")
 def test_absolute_extreme_coefficient_ratio(model, threshold=1e9):
     """
-    Show ratio of the absolute largest and smallest non-zero coefficients.
+    Show the ratio of the absolute largest and smallest non-zero coefficients.
 
     This test will return the absolute largest and smallest, non-zero
-    coefficients from the S-Matrix. A large ratio of these values may point to
-    potential numerical issues when trying to solve the underlying system of
-    equations.
+    coefficients of the stoichiometric matrix. A large ratio of these values
+    may point to potential numerical issues when trying to solve different
+    mathematical optimization problems such as flux-balance analysis.
 
     To pass this test the ratio should not exceed 10^9. This threshold has
     been selected based on experience, and is likely to be adapted when more
     data on solver performance becomes available.
+
+    Implementation:
+    Compose the stoichiometric matrix, then calculate absolute coefficients and
+    lastly use the maximal value and minimal non-zero value to calculate the
+    ratio.
+
     """
     ann = test_absolute_extreme_coefficient_ratio.annotation
     high, low = matrix.absolute_extreme_coefficient_ratio(model)
@@ -50,71 +56,74 @@ def test_absolute_extreme_coefficient_ratio(model, threshold=1e9):
     assert ann["data"] < threshold, ann["message"]
 
 
-@annotate(title="Number of independent conservation relations in model",
-          type="number")
+@annotate(title="Independent Conservation Relations", format_type="raw")
 def test_number_independent_conservation_relations(model):
     """
-    Show number of independent conservation relations in the model.
+    Show the number of independent conservation relations in the model.
 
-    This test will return the number of conservation relations, i.e.
-    conservation pools through the left null space of the S-Matrix.
+    This test will return the number of conservation relations, i.e.,
+    conservation pools through the left null space of the stoichiometric
+    matrix. This test is not scored, as the dimension of the left null space
+    is system-specific.
 
-    This test is not scored, as the dimension of the left null space
-    depends on the S-Matrix constructed, which is system-specific.
+    Implementation:
+    Calculate the left null space, i.e., the null space of the transposed
+    stoichiometric matrix, using an algorithm based on the singular value
+    decomposition adapted from
+    https://scipy.github.io/old-wiki/pages/Cookbook/RankNullspace.html
+    Then, return the estimated dimension of that null space.
+
     """
     ann = test_number_independent_conservation_relations.annotation
     ann["data"] = matrix.number_independent_conservation_relations(model)
+    # Report the number of ICR scaled by the number of metabolites.
+    ann["metric"] = ann["data"] / len(model.metabolites)
     ann["message"] = wrapper.fill(
         """The number of independent conservation relations is {}.""".format(
             ann["data"]))
 
 
-@annotate(title="Number of steady-state flux solution vectors", type="number")
-def test_number_steady_state_flux_solutions(model):
-    """
-    Show number of independent steady-state flux solution vectors for model.
-
-    This test will return the number of steady-state flux solution vectors
-    through the null space of the S-Matrix.
-
-    This test is not scored, as the dimension of the null space depends on the
-    S-Matrix constructed, which is system-specific.
-    """
-    ann = test_number_steady_state_flux_solutions.annotation
-    ann["data"] = matrix.number_steady_state_flux_solutions(model)
-    ann["message"] = wrapper.fill(
-        """The number of independent steady-state flux solution vectors is {}.
-        """.format(ann["data"]))
-
-
-@annotate(title="Rank of S-Matrix", type="number")
+@annotate(title="Rank", format_type="raw")
 def test_matrix_rank(model):
     """
-    Show rank of the S-Matrix.
+    Show the rank of the stoichiometric matrix.
 
-    This test will return the rank of the S-Matrix of the model.
+    The rank of the stoichiometric matrix is system specific. It is
+    calculated using singular value decomposition (SVD).
 
-    This test is not scored, as the rank depends on the S-Matrix constructed,
-    which is system-specific.
+    Implementation:
+    Compose the stoichiometric matrix, then estimate the rank, i.e. the
+    dimension of the column space, of a matrix. The algorithm used by this
+    function is based on the singular value decomposition of the matrix.
+
     """
     ann = test_matrix_rank.annotation
     ann["data"] = matrix.matrix_rank(model)
+    # Report the rank scaled by the number of reactions.
+    ann["metric"] = ann["data"] / len(model.reactions)
     ann["message"] = wrapper.fill(
         """The rank of the S-Matrix is {}.""".format(ann["data"]))
 
 
-@annotate(title="Degrees of freedom of S-Matrix", type="number")
+@annotate(title="Degrees Of Freedom", format_type="raw")
 def test_degrees_of_freedom(model):
     """
-    Show degrees of freedom of the S-Matrix.
+    Show the degrees of freedom of the stoichiometric matrix.
 
-    This test will return the degrees of freedom, i.e. "free variables" of the
-    S-Matrix.
+    The degrees of freedom of the stoichiometric matrix, i.e., the number
+    of 'free variables' is system specific and corresponds to the dimension
+    of the (right) null space of the matrix.
 
-    This test is not scored, as the degrees of freedom depends on S-Matrix
-    constructed, which is system-specific.
+    Implementation:
+    Compose the stoichiometric matrix, then calculate the dimensionality of the
+    null space using the rank-nullity theorem outlined by
+    Alama, J. The Rank+Nullity Theorem. Formalized Mathematics 15, (2007).
+
     """
     ann = test_degrees_of_freedom.annotation
     ann["data"] = matrix.degrees_of_freedom(model)
+    # Report the degrees of freedom scaled by the number of reactions.
+    ann["metric"] = ann["data"] / len(model.reactions)
     ann["message"] = wrapper.fill(
-        """The degrees of freedom of the S-Matrix is {}.""".format(ann["data"]))
+        """The degrees of freedom of the S-Matrix are {}.""".format(
+            ann["data"]))

@@ -21,7 +21,6 @@ from __future__ import absolute_import
 
 import logging
 import re
-from builtins import dict
 from collections import defaultdict
 from operator import itemgetter
 
@@ -29,9 +28,9 @@ from operator import itemgetter
 import numpy as np
 import pandas as pd
 from six import iteritems, itervalues
-from sympy import expand
 from importlib_resources import open_text
 from cobra.exceptions import Infeasible
+from cobra.medium.boundary_types import find_boundary_types
 from pylru import lrudecorator
 
 import memote.utils as utils
@@ -50,7 +49,8 @@ with open_text(memote.support.data, "met_id_shortlist.json",
                encoding="utf-8") as file_handle:
     METANETX_SHORTLIST = pd.read_json(file_handle)
 
-# Provide a compartment shortlist to identify specfic compartments whenever
+
+# Provide a compartment shortlist to identify specific compartments whenever
 # necessary.
 COMPARTMENT_SHORTLIST = {
     'ce': ['cell envelope'],
@@ -120,6 +120,7 @@ def find_transported_elements(rxn):
     return delta_dict
 
 
+@lrudecorator(size=2)
 def find_transport_reactions(model):
     """
     Return a list of all transport reactions.
@@ -139,9 +140,9 @@ def find_transport_reactions(model):
     A notable exception is transport via PTS, which also contains the following
     restriction:
     3. The transported metabolite(s) are transported into a compartment through
-    the exchange of a phosphate.
+    the exchange of a phosphate group.
 
-    An example of tranport via PTS would be
+    An example of transport via PTS would be
     pep(c) + glucose(e) -> glucose-6-phosphate(c) + pyr(c)
 
     Reactions similar to transport via PTS (referred to as "modified transport
@@ -151,17 +152,20 @@ def find_transport_reactions(model):
     Such modified transport reactions can be detected, but only when a formula
     field exists for all metabolites in a particular reaction. If this is not
     the case, transport reactions are identified through annotations, which
-    cannot detect modified tranport reactions.
+    cannot detect modified transport reactions.
 
     """
     transport_reactions = []
-    transport_rxn_candidates = set(model.reactions) - set(model.exchanges) \
+    transport_rxn_candidates = set(model.reactions) - set(model.boundary) \
         - set(find_biomass_reaction(model))
+    transport_rxn_candidates = set(
+        [rxn for rxn in transport_rxn_candidates if len(rxn.compartments) >= 2]
+    )
     # Add all labeled transport reactions
     sbo_matches = set([rxn for rxn in transport_rxn_candidates if
                        rxn.annotation is not None and
-                       'SBO' in rxn.annotation and
-                       rxn.annotation['SBO'] in TRANSPORT_RXN_SBO_TERMS])
+                       'sbo' in rxn.annotation and
+                       rxn.annotation['sbo'] in TRANSPORT_RXN_SBO_TERMS])
     if len(sbo_matches) > 0:
         transport_reactions += list(sbo_matches)
     # Find unlabeled transport reactions via formula or annotation checks
@@ -171,7 +175,7 @@ def find_transport_reactions(model):
         if (None not in rxn_mets) and (len(rxn_mets) != 0):
             if is_transport_reaction_formulae(rxn):
                 transport_reactions.append(rxn)
-        if is_transport_reaction_annotations(rxn):
+        elif is_transport_reaction_annotations(rxn):
             transport_reactions.append(rxn)
 
     return set(transport_reactions)
@@ -179,18 +183,12 @@ def find_transport_reactions(model):
 
 def is_transport_reaction_formulae(rxn):
     """
-    Return boolean given if rxn is a transport reaction (from formulae).
+    Return boolean if a reaction is a transport reaction (from formulae).
 
     Parameters
     ----------
-    model : cobra.Model
-        The metabolic model under investigation.
-
     rxn: cobra.Reaction
         The metabolic reaction under investigation.
-
-    transport_reactions: list
-        A list of all transport reactions.
 
     """
     # Collecting criteria to classify transporters by.
@@ -203,7 +201,7 @@ def is_transport_reaction_formulae(rxn):
     # compartments in the reaction.
     delta_dicts = find_transported_elements(rxn)
     non_zero_array = [v for (k, v) in iteritems(delta_dicts) if v != 0]
-    # Weeding out reactions such as oxidoreductases where no net
+    # Excluding reactions such as oxidoreductases where no net
     # transport of Hydrogen is occurring, but rather just an exchange of
     # electrons or charges effecting a change in protonation.
     if set(transported_mets) != set('H') and list(
@@ -221,32 +219,28 @@ def is_transport_reaction_formulae(rxn):
 
 def is_transport_reaction_annotations(rxn):
     """
-    Return boolean given if rxn is a transport reaction (from annotations).
+    Return boolean if a reaction is a transport reaction (from annotations).
 
     Parameters
     ----------
-    model : cobra.Model
-        The metabolic model under investigation.
-
     rxn: cobra.Reaction
         The metabolic reaction under investigation.
-
-    transport_reactions: list
-        A list of all transport reactions.
 
     """
     reactants = set([(k, tuple(v)) for met in rxn.reactants
                      for k, v in iteritems(met.annotation)
-                     if met.id is not "H" and k is not None and v is not None])
+                     if met.id != "H"
+                     and k is not None and k != 'sbo' and v is not None])
     products = set([(k, tuple(v)) for met in rxn.products
                     for k, v in iteritems(met.annotation)
-                    if met.id is not "H" and k is not None and v is not None])
+                    if met.id != "H"
+                    and k is not None and k != 'sbo' and v is not None])
     # Find intersection between reactant annotations and
     # product annotations to find common metabolites between them,
     # satisfying the requirements for a transport reaction. Reactions such
     # as those involving oxidoreductases (where no net transport of
     # Hydrogen is occurring, but rather just an exchange of electrons or
-    # charges effecting a change in protonation) are weeded out.
+    # charges effecting a change in protonation) are excluded.
     transported_mets = reactants & products
     if len(transported_mets) > 0:
         return True
@@ -289,6 +283,17 @@ def find_biomass_reaction(model):
     """
     Return a list of the biomass reaction(s) of the model.
 
+    This function identifies possible biomass reactions using two steps:
+    1. Return reactions that include the SBO annotation "SBO:0000629" for
+    biomass.
+    If no reactions can be identifies this way:
+    2. Look for the ``buzzwords`` "biomass", "growth" and "bof" in reaction IDs.
+    3. Look for metabolite IDs or names that contain the ``buzzword`` "biomass"
+    and obtain the set of reactions they are involved in.
+    4. Remove boundary reactions from this set.
+    5. Return the union of reactions that match the buzzwords and of the
+    reactions that metabolites are involved in that match the buzzword.
+
     Parameters
     ----------
     model : cobra.Model
@@ -296,13 +301,14 @@ def find_biomass_reaction(model):
 
     Returns
     -------
-    list of biomass reactions
+    list
+        Identified biomass reactions.
 
     """
     sbo_matches = set([rxn for rxn in model.reactions if
                        rxn.annotation is not None and
-                       'SBO' in rxn.annotation and
-                       rxn.annotation['SBO'] == 'SBO:0000629'])
+                       'sbo' in rxn.annotation and
+                       rxn.annotation['sbo'] == 'SBO:0000629'])
 
     if len(sbo_matches) > 0:
         return list(sbo_matches)
@@ -314,27 +320,20 @@ def find_biomass_reaction(model):
 
     biomass_met = []
     for met in model.metabolites:
-        if met.id.lower().startswith('biomass') or met.name.lower().startswith(
-            'biomass'
-        ):
+        if 'biomass' in met.id.lower() or (
+                met.name is not None and 'biomass' in met.name.lower()):
             biomass_met.append(met)
     if biomass_met == 1:
         biomass_met_matches = set(
             biomass_met.reactions
-        ) - set(model.exchanges)
+        ) - set(model.boundary)
     else:
         biomass_met_matches = set()
 
     return list(buzzword_matches | biomass_met_matches)
 
 
-def df2dict(df):
-    """Turn a `pandas.DataFrame` into a `dict` of lists."""
-    blob = dict((key, df[key].tolist()) for key in df.columns)
-    blob["index"] = df.index.tolist()
-    return blob
-
-
+@lrudecorator(size=2)
 def find_demand_reactions(model):
     u"""
     Return a list of demand reactions.
@@ -342,7 +341,7 @@ def find_demand_reactions(model):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
 
     Notes
     -----
@@ -371,12 +370,10 @@ def find_demand_reactions(model):
         extracellular = find_compartment_id_in_model(model, 'e')
     except KeyError:
         extracellular = None
-    demand_and_exchange_rxns = set(model.exchanges)
-    return [rxn for rxn in demand_and_exchange_rxns
-            if not rxn.reversibility and
-            extracellular not in rxn.get_compartments()]
+    return find_boundary_types(model, 'demand', extracellular)
 
 
+@lrudecorator(size=2)
 def find_sink_reactions(model):
     u"""
     Return a list of sink reactions.
@@ -384,7 +381,7 @@ def find_sink_reactions(model):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
 
     Notes
     -----
@@ -412,12 +409,10 @@ def find_sink_reactions(model):
         extracellular = find_compartment_id_in_model(model, 'e')
     except KeyError:
         extracellular = None
-    demand_and_exchange_rxns = set(model.exchanges)
-    return [rxn for rxn in demand_and_exchange_rxns
-            if rxn.reversibility and
-            extracellular not in rxn.get_compartments()]
+    return find_boundary_types(model, 'sink', extracellular)
 
 
+@lrudecorator(size=2)
 def find_exchange_rxns(model):
     u"""
     Return a list of exchange reactions.
@@ -425,7 +420,7 @@ def find_exchange_rxns(model):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
 
     Notes
     -----
@@ -452,57 +447,30 @@ def find_exchange_rxns(model):
         extracellular = find_compartment_id_in_model(model, 'e')
     except KeyError:
         extracellular = None
-    demand_and_exchange_rxns = set(model.exchanges)
-    return [rxn for rxn in demand_and_exchange_rxns
-            if extracellular in rxn.get_compartments()]
+    return find_boundary_types(model, 'exchange', extracellular)
 
 
 def find_interchange_biomass_reactions(model, biomass=None):
     """
-    Return the set of all tranport, boundary, and biomass reactions in a model.
+    Return the set of all transport, boundary, and biomass reactions.
 
-    These reactions are incorporated in models simply for to allow
-    metabolites into the correct compartments for vital system reactions to
-    occur. As such, many tests do not look at these reactions.
+    These reactions are either pseudo-reactions, or incorporated to allow
+    metabolites to pass between compartments. Some tests focus on purely
+    metabolic reactions and hence exclude this set.
 
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
-
+        The metabolic model under investigation.
     biomass : list or cobra.Reaction, optional
-        A list of cobrapy biomass reactions
+        A list of cobrapy biomass reactions.
 
     """
-    # exchanges in this case also refer to sink and demand reactions
-    exchanges = set(model.exchanges)
+    boundary = set(model.boundary)
     transporters = find_transport_reactions(model)
     if biomass is None:
         biomass = set(find_biomass_reaction(model))
-    return exchanges | transporters | biomass
-
-
-def find_functional_units(gpr_str):
-    """
-    Return an iterator of gene IDs grouped by boolean rules from the gpr_str.
-
-    The gpr_str is first transformed into an algebraic expression, replacing
-    the boolean operators 'or' with '+' and 'and' with '*'. Treating the
-    gene IDs as sympy.symbols this allows a mathematical expansion of the
-    algebraic expression. The expanded form is then split again producing sets
-    of gene IDs that in the gpr_str had an 'and' relationship.
-
-    Parameters
-    ----------
-    gpr_str : string
-            A string consisting of gene ids and the boolean expressions 'and'
-            and 'or'
-
-    """
-    algebraic_form = re.sub('[Oo]r', '+', re.sub('[Aa]nd', '*', gpr_str))
-    expanded = str(expand(algebraic_form))
-    for unit in expanded.replace('+', ',').split(' , '):
-        yield unit.split('*')
+    return boundary | transporters | biomass
 
 
 def run_fba(model, rxn_id, direction="max", single_value=True):
@@ -512,12 +480,12 @@ def run_fba(model, rxn_id, direction="max", single_value=True):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
     rxn_id : string
-        A string containing the reaction ID of the desired FBA objective
+        A string containing the reaction ID of the desired FBA objective.
     direction: string
         A string containing either "max" or "min" to specify the direction
-        of the desired FBA objective function
+        of the desired FBA objective function.
     single_value: boolean
         Indicates whether the results for all reactions are gathered from the
         solver, or only the result for the objective value.
@@ -525,7 +493,7 @@ def run_fba(model, rxn_id, direction="max", single_value=True):
     Returns
     -------
     cobra.solution
-        The cobra solution object for the corresponding FBA problem
+        The cobra solution object for the corresponding FBA problem.
 
     """
     model.objective = model.reactions.get_by_id(rxn_id)
@@ -555,7 +523,7 @@ def close_boundaries_sensibly(model):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
 
     Returns
     -------
@@ -569,22 +537,36 @@ def close_boundaries_sensibly(model):
             rxn.bounds = -1, 1
         else:
             rxn.bounds = 0, 1
-    for exchange in model.exchanges:
-        exchange.bounds = (0, 0)
+    for boundary in model.boundary:
+        boundary.bounds = (0, 0)
+
+
+def open_exchanges(model):
+    """
+    Open all exchange reactions.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The metabolic model under investigation.
+
+    """
+    for rxn in model.exchanges:
+        rxn.bounds = (-1000, 1000)
 
 
 def open_boundaries(model):
     """
-    Return a copy of cobra model with all boundaries opened.
+    Open all boundary reactions.
 
     Parameters
     ----------
-    cobra.Model
-        A cobra model with all boundary reactions opened.
+    model : cobra.Model
+        The metabolic model under investigation.
 
     """
-    for exchange in model.exchanges:
-        exchange.bounds = (-1000, 1000)
+    for boundary in model.boundary:
+        boundary.bounds = (-1000, 1000)
 
 
 def metabolites_per_compartment(model, compartment_id):
@@ -594,7 +576,7 @@ def metabolites_per_compartment(model, compartment_id):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
     compartment_id : string
         Model specific compartment identifier.
 
@@ -615,7 +597,7 @@ def largest_compartment_id_met(model):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
 
     Returns
     -------
@@ -643,7 +625,7 @@ def find_compartment_id_in_model(model, compartment_id):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
     compartment_id : string
         Memote internal compartment identifier used to access compartment name
         shortlist to look up potential compartment names.
@@ -651,7 +633,7 @@ def find_compartment_id_in_model(model, compartment_id):
     Returns
     -------
     string
-        Compartment identifier in the model corresponding to compartment_id
+        Compartment identifier in the model corresponding to compartment_id.
 
     """
     if compartment_id not in COMPARTMENT_SHORTLIST.keys():
@@ -681,12 +663,12 @@ def find_compartment_id_in_model(model, compartment_id):
 
 def find_met_in_model(model, mnx_id, compartment_id=None):
     """
-    Identify metabolites in the model by looking up IDs in METANETX_SHORTLIST.
+    Return specific metabolites by looking up IDs in METANETX_SHORTLIST.
 
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model
+        The metabolic model under investigation.
     mnx_id : string
         Memote internal MetaNetX metabolite identifier used to map between
         cross-references in the METANETX_SHORTLIST.
@@ -696,31 +678,61 @@ def find_met_in_model(model, mnx_id, compartment_id=None):
 
     Returns
     -------
-    list of cobra.Metabolite
+    list
+        cobra.Metabolite(s) matching the mnx_id.
 
     """
-    if mnx_id not in METANETX_SHORTLIST.columns:
-        raise RuntimeError("{} is not in the MetaNetX Shortlist! Make sure "
-                           "you typed the ID correctly, if yes, update the "
-                           "shortlist by updating and re-running the script "
-                           "generate_mnx_shortlists.py.".format(mnx_id))
+    def compare_annotation(annotation):
+        """
+        Return annotation IDs that match to METANETX_SHORTLIST references.
 
+        Compares the set of METANETX_SHORTLIST references for a given mnx_id
+        and the annotation IDs stored in a given annotation dictionary.
+        """
+        query_values = set(utils.flatten(annotation.values()))
+        ref_values = set(utils.flatten(METANETX_SHORTLIST[mnx_id]))
+        return query_values & ref_values
+
+    # Make sure that the MNX ID we're looking up exists in the metabolite
+    # shortlist.
+    if mnx_id not in METANETX_SHORTLIST.columns:
+        raise ValueError(
+            "{} is not in the MetaNetX Shortlist! Make sure "
+            "you typed the ID correctly, if yes, update the "
+            "shortlist by updating and re-running the script "
+            "generate_mnx_shortlists.py.".format(mnx_id)
+        )
     candidates = []
-    regex = re.compile('^{}(_[a-zA-Z]+?)*?$'.format(mnx_id))
+    # The MNX ID used in the model may or may not be tagged with a compartment
+    # tag e.g. `MNXM23141_c` vs. `MNXM23141`, which is tested with the
+    # following regex.
+    # If the MNX ID itself cannot be found as an ID, we try all other
+    # identifiers that are provided by our shortlist of MetaNetX' mapping
+    # table.
+    regex = re.compile('^{}(_[a-zA-Z0-9]+)?$'.format(mnx_id))
     if model.metabolites.query(regex):
         candidates = model.metabolites.query(regex)
+    elif model.metabolites.query(compare_annotation, attribute='annotation'):
+        candidates = model.metabolites.query(
+            compare_annotation, attribute='annotation'
+        )
     else:
         for value in METANETX_SHORTLIST[mnx_id]:
             if value:
                 for ident in value:
-                    regex = re.compile('^{}(_[a-zA-Z]+?)*?$'.format(ident))
+                    regex = re.compile('^{}(_[a-zA-Z0-9]+)?$'.format(ident))
                     if model.metabolites.query(regex, attribute='id'):
                         candidates.extend(
                             model.metabolites.query(regex, attribute='id'))
 
+    # Return a list of all possible candidates if no specific compartment ID
+    # is provided.
+    # Otherwise, just return the candidate in one specific compartment. Raise
+    # an exception if there are more than one possible candidates for a given
+    # compartment.
     if compartment_id is None:
+        print("compartment_id = None?")
         return candidates
-
     else:
         candidates_in_compartment = \
             [cand for cand in candidates if cand.compartment == compartment_id]
@@ -763,3 +775,35 @@ def find_objective_function(model):
 
     """
     return [rxn for rxn in model.reactions if rxn.objective_coefficient != 0]
+
+
+@lrudecorator(size=2)
+def find_bounds(model):
+    """
+    Return the median upper and lower bound of the metabolic model.
+
+    Bounds can vary from model to model. Cobrapy defaults to (-1000, 1000) but
+    this may not be the case for merged or autogenerated models. In these
+    cases, this function is used to iterate over all the bounds of all the
+    reactions and find the median bound values in the model, which are
+    then used as the 'most common' bounds.
+
+    Parameters
+    ----------
+    model : cobra.Model
+        The metabolic model under investigation.
+
+    """
+    lower_bounds = np.asarray([rxn.lower_bound for rxn in model.reactions],
+                              dtype=float)
+    upper_bounds = np.asarray([rxn.upper_bound for rxn in model.reactions],
+                              dtype=float)
+    lower_bound = np.nanmedian(lower_bounds[lower_bounds != 0.0])
+    upper_bound = np.nanmedian(upper_bounds[upper_bounds != 0.0])
+    if np.isnan(lower_bound):
+        LOGGER.warning("Could not identify a median lower bound.")
+        lower_bound = -1000.0
+    if np.isnan(upper_bound):
+        LOGGER.warning("Could not identify a median upper bound.")
+        upper_bound = 1000.0
+    return lower_bound, upper_bound

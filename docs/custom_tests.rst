@@ -49,7 +49,7 @@ The minimal content of a custom test module should look like this:
 
     @annotate(
         title="Some human-readable descriptive title for the report",
-        type="Single keyword describing how the data ought to be displayed."
+        format_type="Single keyword describing how the data ought to be displayed."
     )
     def test_your_custom_case(read_only_model):
     """
@@ -60,7 +60,7 @@ The minimal content of a custom test module should look like this:
     """
     ann = test_your_custom_case.annotation
     ann["data"] = list(your_support_module.specific_model_quality(read_only_model))
-    ann["metric"] = len(ann["data"]) / len(read_only_model.reactions)
+    ann["metric"] = len(ann["data"]) / len(read_only_model.total_model_quality)
     ann["message"] = wrapper.fill(
         """A concise message that displays and explains the test results.
         For instance, if data is a list of items the amount: {} and
@@ -82,7 +82,7 @@ in the support module.
 
 The following components are requirements of ``test_your_custom_case``:
 
-- Each test has to be decoreated with the ``annotate()`` decorator, which
+- Each test has to be decorated with the ``annotate()`` decorator, which
   collects:
 
   - The ``data`` that the test is run on. Can be of the following type: ``list``,
@@ -90,16 +90,17 @@ The following components are requirements of ``test_your_custom_case``:
     can be of type ``dictionary``, but this is only supported for parametrized
     tests (see example below).
 
-  - The ``type`` of data. This is not the actual python type
-    of ``data``! Choose it according to how you'd like the results to be
-    displayed in the reports. For example: In the case above ``data``
-    is a list, for instance it could be list of unbalanced reactions. If you choose
-    ``type="count"``, the report will display its length. If you would like to
-    display data 'as is' for instance when ``data`` is single string then
-    ``type="raw"`` is best. In case, you'd rather display
-    the ``metric`` as opposed to the contents of ``data`` use
-    ``type="percent"``. ``type="number"`` is appropriate for displaying single
-    integer and float ``data``.
+  - The ``format_type`` of data. This is not the actual python type
+    of ``data`` but it correlates closely with it.
+    If ``data`` is a ``set``, ``tuple`` or ``list`` ``format_type="count"`` 
+    configures the report to display its length.
+    If ``data`` is an ``integer`` or ``float`` use ``format_type="number"``.
+    If ``data`` is a single string, then choose ``format_type="raw"``. This 
+    ``format_type`` also works for any other data type. 
+    In case, you'd rather display the ``metric`` as opposed to the contents of 
+    ``data`` use ``format_type="percent"``.
+    It is important that the custom test case does not return ``nan``, 
+    ``None`` or ``null`` as this will lead to errors on the report.
 
   - A human-readable, descriptive ``title`` that will be displayed in the report
     as opposed to the test function name ``test_your_custom_case`` which will
@@ -119,7 +120,7 @@ The following components are requirements of ``test_your_custom_case``:
   with the configuration to find custom tests.
 
 - ``read_only_model`` is the required parameter to access the loaded
-  metabolic model.
+  metabolic model at runtime.
 
 - In the report the docstring is taken as a tooltip for each test. It should
   generally adhere to the `conventions`_ of the NumPy/SciPy documentation. It
@@ -149,7 +150,7 @@ the metabolite annotations for each database.
 
     @pytest.mark.parametrize("db", list(annotation.METABOLITE_ANNOTATIONS))
     @annotate(title="Missing Metabolite Annotations Per Database",
-              type="count", message=dict(), data=dict(), metric=dict())
+              format_type="count", message=dict(), data=dict(), metric=dict())
     def test_metabolite_annotation_overview(read_only_model, db):
         """
         Expect all metabolites to have annotations from common databases.
@@ -171,41 +172,88 @@ Custom Test Configuration
 =========================
 
 Finally, there are two ways of configuring memote to find custom tests. The
-first involves the ``--custom`` option of the memote CLI and requires the user
-to provide a corresponding config file with the custom test modules, while the second
-involves passing arguments directly to pytest through the use of the
-``--pytest-args`` option, which can be abbreviated to ``-a``. This option only
-requires the user to set up the custom test module. No config file is needed
-here.
+first involves the ``--custom-*`` options of the memote CLI and requires the 
+user to provide a corresponding config file with the custom test modules, 
+while the second involves passing arguments directly to pytest through the use 
+of the ``--pytest-args`` option, which can be abbreviated to ``-a``. This 
+option only requires the user to set up the custom test module. No config file 
+is needed here.
 
 The Custom Option
 -----------------
 
-When invoking the ``memote run`` or ``memote report snapshot`` commands in
-the terminal, it is possible to add the ``--custom`` option. This option takes
-two parameters in a fixed order:
+When invoking the ``memote run``, ``memote report snapshot`` or 
+``memote report diff`` commands in the terminal, it is possible to add the 
+``--custom-*`` options:
 
-1. The absolute path to any directory in which pytest is to check for custom
-   tests modules. By default test discovery is recursive. More information is
-   provided `here`_.
+1. ``--custom-tests`` takes the absolute path to any directory in which pytest 
+   is to check for custom tests modules. By default test discovery is 
+   recursive. More information is provided `here`_.
 
-2. The absolute path to a valid configuration file.
+2. ``--custom-config`` The absolute path to a valid configuration file.
+
+To simply insert custom tests into the test suite, it suffices to use the 
+first option ``--custom-tests``. Providing the custom configuration file with 
+``--custom-config`` further gives you the means to weigh, categorise and 
+layout where on the report your results will be displayed.
 
 .. _here: https://docs.pytest.org/en/latest/goodpractices.html
 
 .. code-block:: console
 
-    $ memote report snapshot --custom path/to/dir/ path/to/config.yml --filename "report.html" path/to/model.xml
+    $ memote report snapshot --custom-tests path/to/dir/ --custom-config path/to/config.yml --filename "report.html" path/to/model.xml
 
 The Pytest Option
 -----------------
 
-In case you want to avoid setting up a configuration file, it is possible to
-pass any number of absolute paths to custom test directories directly to pytest,
-as long as they are placed behind any other parameters that you might want to pass in.
-For instance here we want to get a list of the ten slowest running tests while
-including two custom test module directories:
+In addition, it is possible to pass any number of absolute paths to custom 
+test directories directly to pytest, as long as they are placed behind any 
+other parameters that you might want to pass in. For instance here we want to 
+get a list of the ten slowest running tests while including two custom test 
+module directories:
 
 .. code-block:: console
 
     $ memote run -a "--durations=10 path/to/dir1/ path/to/dir2/" --filename "report.html" path/to/model.xml
+
+
+Guidelines
+==========
+
+Please consider the following guidelines which reflect some of the considerations
+behind the core tests in memote. Adhering to these guidelines will allow other
+researchers to easily adopt your custom tests and ensure that they are applicable
+to a wide array of modeling practises.
+
+1. **Be namespace agnostic**. Use the ``METANETX_SHORTLIST`` and
+``COMPARTMENT_SHORTLIST`` (both in ``memote/support/helpers.py``) mapping
+tables from memote or consider creating your own if your custom test needs to
+identify a specific metabolite in a specific
+compartment. You can generate a custom metabolite shortlist by adapting
+``shortlist.tsv`` and then executing the script ``annotate_mnx_shortlists.py``
+found in ``memote/scripts``.
+
+2. **Be paradigm agnostic**. Use the functions provided in
+``memote/support`` for routine operations i.e. identifying a model's biomass
+reaction(s) or finding all purely metabolic reactions. We have been intent on making
+memote as robust as possible with regards to the range of modeling
+paradigms we have encountered so far. In addition, support functions are rigidly
+unit tested.
+
+3. **Be organism agnostic**. Unless you target a specific class of organism,
+consider how your test performs on a model of a different organism. Will the
+results be biased by that in anyway? If so, consider emphasizing that bias in the
+docstring.
+
+4. **Be reproducible**. Provide a ``requirements.txt`` or ``setup.cfg`` with your
+custom test module if you rely on packages or specific version that differ from
+those memote relies on.
+
+5. **Write readable code**. Lint your code with respect to PEP8_, annotate it
+consistently and make use of logging.
+
+6. **Share the love**. Let us know about your custom tests! We are considering
+to build a registry and knowing that people use this feature is the first step
+towards that.
+
+.. _PEP8: https://www.python.org/dev/peps/pep-0008/

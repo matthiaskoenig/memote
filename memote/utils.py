@@ -19,14 +19,21 @@
 
 from __future__ import absolute_import
 
+import json
 import logging
 from builtins import dict, str
-from numpydoc.docscrape import NumpyDocString
 from textwrap import TextWrapper
+
+from future.utils import raise_with_traceback
+from numpy import isfinite
+from numpydoc.docscrape import NumpyDocString
+from six import string_types
+from depinfo import print_dependencies
 
 __all__ = ("register_with", "annotate", "get_ids",
            "get_ids_and_bounds", "truncate", "wrapper",
-           "log_json_incompatible_types")
+           "log_json_incompatible_types", "show_versions", "jsonify",
+           "is_modified", "stdout_notifications")
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,10 +54,12 @@ def register_with(registry):
 
     Examples
     --------
-    REGISTRY = dict()
-    @register_with(REGISTRY)
-    def build_empty(base):
-        return base
+    .. code-block:: python
+
+        REGISTRY = dict()
+        @register_with(REGISTRY)
+        def build_empty(base):
+            return base
 
     """
     def decorator(func):
@@ -59,29 +68,29 @@ def register_with(registry):
     return decorator
 
 
-# TODO: Change naming of the 'type' argument once the angular app is completed.
-# It is misleading.
-def annotate(title, type, message=None, data=None, metric=1.0):
+def annotate(title, format_type, message=None, data=None, metric=1.0):
     """
-    Annotate a test case.
+    Annotate a test case with info that should be displayed in the reports.
 
     Parameters
     ----------
     title : str
         A human-readable descriptive title of the test case.
-    type : str
+    format_type : str
         A string that determines how the result data is formatted in the
         report. It is expected not to be None.
-        - 'number' : 'data' is a single number which can be an integer or
+
+        * 'number' : 'data' is a single number which can be an integer or
           float and should be represented as such.
-        - 'count' : 'data' is a list, set or tuple. Choosing 'count' will
+        * 'count' : 'data' is a list, set or tuple. Choosing 'count' will
           display the length of that list e.g. number of metabolites without
           formula.
-        - 'percent' : Instead of 'data' the content of 'metric' ought to be
+        * 'percent' : Instead of 'data' the content of 'metric' ought to be
           displayed e.g. percentage of metabolites without charge.
           'metric' is expected to be a floating point number.
-        - 'raw' : 'data' is ought to be displayed "as is" without formatting.
+        * 'raw' : 'data' is ought to be displayed "as is" without formatting.
           This option is appropriate for single strings or a boolean output.
+
     message : str
         A short written explanation that states and possibly explains the test
         result.
@@ -105,7 +114,7 @@ def annotate(title, type, message=None, data=None, metric=1.0):
     predefined keys as a dictionary.
 
     """
-    if type not in TYPES:
+    if format_type not in TYPES:
         raise ValueError(
             "Invalid type. Expected one of: {}.".format(", ".join(TYPES)))
 
@@ -115,7 +124,7 @@ def annotate(title, type, message=None, data=None, metric=1.0):
             summary=extended_summary(func),
             message=message,
             data=data,
-            type=type,
+            format_type=format_type,
             metric=metric)
         return func
     return decorator
@@ -127,9 +136,17 @@ def get_ids(iterable):
 
 
 def get_ids_and_bounds(iterable):
-    """Retrieve the identifier and bounds of a  number of objects."""
+    """Retrieve the identifier and bounds of a number of objects."""
     return ["{0.lower_bound} <= {0.id} <= {0.upper_bound}".format(elem) for
             elem in iterable]
+
+
+def filter_none(attribute, default):
+    """Handle attributes of model components that are optional in SBML."""
+    if attribute is None:
+        return default
+    else:
+        return attribute
 
 
 def truncate(sequence):
@@ -170,13 +187,15 @@ def log_json_incompatible_types(obj):
     while len(keys_to_explore) > 0:
         key = keys_to_explore.pop()
         if not isinstance(key, str):
-            LOGGER.debug(type(key))
+            LOGGER.info(type(key))
         value = obj[key]
         if isinstance(value, dict):
-            LOGGER.debug("%s:", key)
+            LOGGER.info("%s:", key)
             log_json_incompatible_types(value)
         elif not isinstance(value, JSON_TYPES):
-            LOGGER.debug("%s: %s", key, type(value))
+            LOGGER.info("%s: %s", key, type(value))
+        elif isinstance(value, (int, float)) and not isfinite(value):
+            LOGGER.info("%s: %f", key, value)
 
 
 def extended_summary(func):
@@ -186,7 +205,7 @@ def extended_summary(func):
     Parameters
     ----------
     func : function
-        A scored or unscored test function used in `memote report snapshot`
+        A test function used in `memote report snapshot`
 
     Returns
     -------
@@ -196,3 +215,88 @@ def extended_summary(func):
     """
     doc = NumpyDocString(func.__doc__)
     return "\n".join(doc["Extended Summary"])
+
+
+def show_versions():
+    """Print formatted dependency information to stdout."""
+    print_dependencies("memote")
+
+
+def jsonify(obj, pretty=False):
+    """
+    Turn a nested object into a (compressed) JSON string.
+
+    Parameters
+    ----------
+    obj : dict
+        Any kind of dictionary structure.
+    pretty : bool, optional
+        Whether to format the resulting JSON in a more legible way (
+        default False).
+
+    """
+    if pretty:
+        params = dict(sort_keys=True, indent=2, allow_nan=False,
+                      separators=(",", ": "), ensure_ascii=False)
+    else:
+        params = dict(sort_keys=False, indent=None, allow_nan=False,
+                      separators=(",", ":"), ensure_ascii=False)
+    try:
+        return json.dumps(obj, **params)
+    except (TypeError, ValueError) as error:
+        LOGGER.critical(
+            "The memote result structure is incompatible with the JSON "
+            "standard.")
+        log_json_incompatible_types(obj)
+        raise_with_traceback(error)
+
+
+def flatten(list_of_lists):
+    """Flatten a list of lists but maintain strings and ints as entries."""
+    flat_list = []
+    for sublist in list_of_lists:
+        if isinstance(sublist, string_types) or isinstance(sublist, int):
+            flat_list.append(sublist)
+        elif sublist is None:
+            continue
+        elif not isinstance(sublist, string_types) and len(sublist) == 1:
+            flat_list.append(sublist[0])
+        else:
+            flat_list.append(tuple(sublist))
+    return flat_list
+
+
+def is_modified(path, commit):
+    """
+    Test whether a given file was modified in a specific commit.
+
+    Parameters
+    ----------
+    path : str
+        The path of a file to be checked.
+    commit : git.Commit
+        A git commit object.
+
+    Returns
+    -------
+    bool
+        Whether or not the given path is among the modified files.
+
+    """
+    return path in commit.stats.files
+
+
+def stdout_notifications(notifications):
+    """
+    Print each entry of errors and warnings to stdout.
+
+    Parameters
+    ----------
+    notifications: dict
+        A simple dictionary structure containing a list of errors and warnings.
+
+    """
+    for error in notifications["errors"]:
+        LOGGER.error(error)
+    for warn in notifications["warnings"]:
+        LOGGER.warning(warn)

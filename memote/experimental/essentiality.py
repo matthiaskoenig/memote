@@ -37,18 +37,35 @@ class EssentialityExperiment(Experiment):
 
     SCHEMA = "essentiality.json"
 
-    def __init__(self, obj, **kwargs):
+    def __init__(self, **kwargs):
         """
         Initialize an essentiality experiment.
 
         Parameters
         ----------
-        obj : dict
         kwargs
 
         """
-        super(EssentialityExperiment, self).__init__(obj=obj, **kwargs)
-        self.medium = obj.get("medium")
+        super(EssentialityExperiment, self).__init__(**kwargs)
+
+    def load(self, dtype_conversion=None):
+        """
+        Load the data table and corresponding validation schema.
+
+        Parameters
+        ----------
+        dtype_conversion : dict
+            Column names as keys and corresponding type for loading the data.
+            Please take a look at the `pandas documentation
+            <https://pandas.pydata.org/pandas-docs/stable/io.html#specifying-column-data-types>`__
+            for detailed explanations.
+
+        """
+        if dtype_conversion is None:
+            dtype_conversion = {"essential": str}
+        super(EssentialityExperiment, self).load(
+            dtype_conversion=dtype_conversion)
+        self.data["essential"] = self.data["essential"].isin(self.TRUTHY)
 
     def validate(self, model, checks=[]):
         """Use a defined schema to validate the medium table format."""
@@ -69,7 +86,8 @@ class EssentialityExperiment(Experiment):
             max_val = model.slim_optimize()
             essen = single_gene_deletion(
                 model, gene_list=self.data["gene"], processes=1)
-        essen.index = [list(g)[0] for g in essen.index]
+        essen["gene"] = [list(g)[0] for g in essen.index]
+        essen.index = essen["gene"]
         essen["essential"] = (essen["growth"] < (max_val * 0.1)) \
             | essen["growth"].isna()
         return essen

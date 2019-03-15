@@ -24,7 +24,7 @@ import logging
 from io import open
 from os.path import dirname, join, isabs
 
-import ruamel.yaml as yaml
+from ruamel.yaml import YAML
 from jsonschema import Draft4Validator
 from importlib_resources import open_text
 from six import iteritems
@@ -36,6 +36,7 @@ from memote.experimental.growth import GrowthExperiment
 __all__ = ("ExperimentConfiguration",)
 
 LOGGER = logging.getLogger(__name__)
+yaml = YAML(typ="safe")
 
 
 class ExperimentConfiguration(object):
@@ -57,7 +58,7 @@ class ExperimentConfiguration(object):
         """
         super(ExperimentConfiguration, self).__init__(**kwargs)
         with open(filename) as file_h:
-            self.config = yaml.safe_load(file_h)
+            self.config = yaml.load(file_h)
         self._base = dirname(filename)
         self.media = dict()
         self.essentiality = dict()
@@ -76,6 +77,7 @@ class ExperimentConfiguration(object):
         self.validate()
         self.load_medium(model)
         self.load_essentiality(model)
+        self.load_growth(model)
         # self.load_experiment(config.config.get("growth"), model)
         return self
 
@@ -158,6 +160,11 @@ class ExperimentConfiguration(object):
                 filename = join(path, filename)
             growth = GrowthExperiment(
                 identifier=exp_id, obj=exp, filename=filename)
+            if growth.medium is not None:
+                assert growth.medium in self.media, \
+                    "Growth-experiment '{}' has an undefined medium '{}'." \
+                    "".format(exp_id, growth.medium)
+                growth.medium = self.media[growth.medium]
             growth.load()
             growth.validate(model)
             self.growth[exp_id] = growth

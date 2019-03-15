@@ -80,3 +80,37 @@ textarea {
   color: black;
   font-weight: 500;
 }
+
+.MatButtonEmulation {
+  font: caption;
+  display:inline-block;
+  margin: 0.05vh;
+  white-space: normal;
+  word-wrap: break-word;
+  border-radius: 2px;
+  text-align: center;
+  color: white ;
+  background: #2a7bb8; 
+  width: 70px;
+  padding: 0.5vw;
+  height: auto; 
+}
+
+.badge {
+  position:relative;
+  text-align:center;
+  background:#ff4081;
+  width:1vmax;
+  height:1vmax;
+  line-height:1vmax;        
+
+  border-radius:50%;
+}
+
+.vert-align {
+    display: inline-block;
+    vertical-align: middle;
+    line-height: normal;
+    color:white;
+    font-size:0.6vmax;
+  }

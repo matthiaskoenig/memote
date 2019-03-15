@@ -147,15 +147,40 @@ def zero_constrained_rxn(base):
 @register_with(MODEL_REGISTRY)
 def nonzero_constrained_rxn(base):
     """Provide a model with one nonzero-constrained reaction"""
-    rxn_1 = cobra.Reaction("RXN1")
     met_1 = cobra.Metabolite("met1")
     met_2 = cobra.Metabolite("met2")
+    met_3 = cobra.Metabolite("met3")
+    met_4 = cobra.Metabolite("met4")
+    rxn_1 = cobra.Reaction("RXN1")
     rxn_1.add_metabolites({met_1: 1, met_2: -1})
     rxn_2 = cobra.Reaction("RXN2")
-    rxn_2.add_metabolites({met_1: -1, met_2: 1})
-    rxn_1.bounds = 0, 5
-    rxn_2.bounds = -5, 0
-    base.add_reactions([rxn_1, rxn_2])
+    rxn_2.add_metabolites({met_2: -1, met_3: -1})
+    rxn_3 = cobra.Reaction("RXN3")
+    rxn_3.add_metabolites({met_3: -1, met_4: 1})
+    rxn_1.bounds = -1000, 1000
+    rxn_2.bounds = -1000, 1000
+    rxn_3.bounds = 0, 10
+    base.add_reactions([rxn_1, rxn_2, rxn_3])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def no_nonzero_constrained_rxn(base):
+    """Provide a model with no nonzero-constrained reactions"""
+    met_1 = cobra.Metabolite("met1")
+    met_2 = cobra.Metabolite("met2")
+    met_3 = cobra.Metabolite("met3")
+    met_4 = cobra.Metabolite("met4")
+    rxn_1 = cobra.Reaction("RXN1")
+    rxn_1.add_metabolites({met_1: 1, met_2: -1})
+    rxn_2 = cobra.Reaction("RXN2")
+    rxn_2.add_metabolites({met_2: -1, met_3: -1})
+    rxn_3 = cobra.Reaction("RXN3")
+    rxn_3.add_metabolites({met_3: -1, met_4: 1})
+    rxn_1.bounds = -1000, 1000
+    rxn_2.bounds = -1000, 1000
+    rxn_3.bounds = 0, 1000
+    base.add_reactions([rxn_1, rxn_2, rxn_3])
     return base
 
 
@@ -299,6 +324,326 @@ def non_reversible_oxygen_flow(base):
     return base
 
 
+@register_with(MODEL_REGISTRY)
+def dup_mets_in_c(base):
+    """Provide a model with duplicate metabolites in the same compartment"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    dup_a = cobra.Metabolite("x_c", compartment="c")
+    not_a = cobra.Metabolite("b_c", compartment="c")
+
+    met_a.annotation["inchikey"] = "1231"
+    met_a.annotation["kegg"] = "123"
+    dup_a.annotation["inchikey"] = "1231"
+    dup_a.annotation["kegg"] = "123"
+    not_a.annotation["inchikey"] = "3211"
+    not_a.annotation["kegg"] = "321"
+
+    met_b = cobra.Metabolite("a_p", compartment="p")
+    met_c = cobra.Metabolite("a_e", compartment="e")
+    rxn_a_b = cobra.Reaction("AB")
+    rxn_a_b.add_metabolites({dup_a: 1, met_a: 1, met_b: -1})
+    rxn_b_c = cobra.Reaction("BC")
+    rxn_b_c.add_metabolites({not_a: 1, met_b: 1, met_c: -1})
+    base.add_reactions([rxn_b_c, rxn_a_b])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_mets_in_c_wrong_annotation(base):
+    """Provide a model like `dup_mets_in_c` but with improper annotations"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    dup_a = cobra.Metabolite("x_c", compartment="c")
+    not_a = cobra.Metabolite("b_c", compartment="c")
+
+    met_a.annotation["kegg"] = "123"
+    dup_a.annotation["kegg"] = "123"
+    not_a.annotation["kegg"] = "321"
+
+    met_b = cobra.Metabolite("a_p", compartment="p")
+    met_c = cobra.Metabolite("a_e", compartment="e")
+    rxn_a_b = cobra.Reaction("AB")
+    rxn_a_b.add_metabolites({dup_a: 1, met_a: 1, met_b: -1})
+    rxn_b_c = cobra.Reaction("BC")
+    rxn_b_c.add_metabolites({not_a: 1, met_b: 1, met_c: -1})
+    base.add_reactions([rxn_b_c, rxn_a_b])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns(base):
+    """Provide a model with duplicate reactions"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    met_a.annotation["inchikey"] = "123"
+    met_b.annotation["inchikey"] = "456"
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = "HEX"
+    dup_1.annotation["kegg.reaction"] = "HEX"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_multiple_anns(base):
+    """Provide a model like `dup_rxns` but with multiple annotations per rxn"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = "HEX"
+    rxn_1.annotation["metanetx.reaction"] = "MNXR1"
+    dup_1.annotation["kegg.reaction"] = "HEX"
+    dup_1.annotation["metanetx.reaction"] = "MNXR1"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_partial_matching_multiple_anns(base):
+    """Provide a model like `dup_rxns_multiple_anns` but with partial matches"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = "HEX"
+    rxn_1.annotation["metanetx.reaction"] = "MNXR1"
+    dup_1.annotation["kegg.reaction"] = "HEX"
+    dup_1.annotation["metanetx.reaction"] = "MNXR2"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_no_matching_multiple_anns(base):
+    """Provide a model like `dup_rxns_multiple_anns` but with no matches"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = "HEX11"
+    rxn_1.annotation["metanetx.reaction"] = "MNXR11"
+    dup_1.annotation["kegg.reaction"] = "HEX22"
+    dup_1.annotation["metanetx.reaction"] = "MNXR22"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_list_anns(base):
+    """Provide a model like `dup_rxns` but with list annotations"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = ["HEX11", "HEX22"]
+    dup_1.annotation["kegg.reaction"] = "HEX22"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_multiple_list_anns(base):
+    """Provide a model like `dup_rxns_multiple_anns` but with list anns"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = ["HEX11", "HEX22"]
+    dup_1.annotation["kegg.reaction"] = ["HEX22", "HEX11"]
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_multiple_list_anns_no_match(base):
+    """Provide a model like `dup_rxns_multiple_list_anns` but with no match"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = ["HEX111", "HEX222"]
+    dup_1.annotation["kegg.reaction"] = ["HEX221", "HEX112"]
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def rxns_no_exchange(base):
+    """Provide a model with no exchange reactions"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def rxns_with_two_substrates(base):
+    """Provide a model with two substrates that can be taken up"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    met_c = cobra.Metabolite("c_e", compartment="e")
+    met_d = cobra.Metabolite("d_e", compartment="e")
+    rxn_1 = cobra.Reaction("rxn1")
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1])
+    base.add_boundary(
+        met_c, type="custom", reaction_id="EX_c", lb=-1000, ub=1000)
+    base.add_boundary(
+        met_d, type="custom", reaction_id="EX_d", lb=-1000, ub=1000)
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def rxns_with_two_false_substrates(base):
+    """Provide a model with two false substrates that cannot be taken up"""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    met_c = cobra.Metabolite("c_e", compartment="c")
+    met_d = cobra.Metabolite("d_e", compartment="c")
+    rxn_1 = cobra.Reaction("rxn1")
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    base.add_reactions([rxn_1])
+    base.add_boundary(met_c, type="custom", reaction_id="EX_c", lb=1, ub=1000)
+    base.add_boundary(met_d, type="custom", reaction_id="EX_d", lb=1, ub=1000)
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_compartment(base):
+    """Provide a model with identical reactions in different compartments."""
+    met_a = cobra.Metabolite("a_c", compartment="c")
+    met_b = cobra.Metabolite("b_c", compartment="c")
+    met_c = cobra.Metabolite("a_m", compartment="m")
+    met_d = cobra.Metabolite("b_m", compartment="m")
+    met_a.annotation["inchikey"] = "123"
+    met_b.annotation["inchikey"] = "456"
+    met_c.annotation["inchikey"] = "123"
+    met_d.annotation["inchikey"] = "456"
+    rxn_1 = cobra.Reaction("rxn1")
+    dup_1 = cobra.Reaction("dup1")
+    rxn_1.annotation["kegg.reaction"] = "HEX"
+    dup_1.annotation["kegg.reaction"] = "HEX"
+    rxn_1.add_metabolites({met_a: -1, met_b: 1})
+    dup_1.add_metabolites({met_c: -1, met_d: 1})
+    base.add_reactions([rxn_1, dup_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_irrev(base):
+    """
+    Provide a model with oppositely directional but irreversible reactions.
+
+    """
+    met_a = cobra.Metabolite("h2o_c", compartment="c")
+    met_b = cobra.Metabolite("methf_c", compartment="c")
+    met_c = cobra.Metabolite("5fthf_c", compartment="c")
+    met_d = cobra.Metabolite("h_c", compartment="c")
+    met_a.annotation["inchikey"] = "123"
+    met_b.annotation["inchikey"] = "456"
+    met_c.annotation["inchikey"] = "789"
+    met_d.annotation["inchikey"] = "111"
+    FOMETRi = cobra.Reaction("FOMETRi")
+    THFAT = cobra.Reaction("THFAT")
+    FOMETRi.annotation["kegg.reaction"] = "R02300"
+    FOMETRi.annotation["brenda"] = "2.1.2.10"
+    THFAT.annotation["kegg.reaction"] = "R02300"
+    THFAT.annotation["brenda"] = "2.1.2.10"
+    FOMETRi.add_metabolites({met_c: 1, met_d: 1, met_a: -1, met_b: -1})
+    THFAT.add_metabolites({met_c: -1, met_d: -1, met_a: 1, met_b: 1})
+    base.add_reactions([FOMETRi, THFAT])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_rev(base):
+    """
+    Provide a model with oppositely directional but reversible reactions.
+
+    """
+    met_a = cobra.Metabolite("h2o_c", compartment="c")
+    met_b = cobra.Metabolite("methf_c", compartment="c")
+    met_c = cobra.Metabolite("5fthf_c", compartment="c")
+    met_d = cobra.Metabolite("h_c", compartment="c")
+    met_a.annotation["inchikey"] = "123"
+    met_b.annotation["inchikey"] = "456"
+    met_c.annotation["inchikey"] = "789"
+    met_d.annotation["inchikey"] = "111"
+    FOMETRi = cobra.Reaction("FOMETRi", upper_bound=1000, lower_bound=-1000)
+    THFAT = cobra.Reaction("THFAT", upper_bound=1000, lower_bound=-1000)
+    FOMETRi.annotation["kegg.reaction"] = "R02300"
+    FOMETRi.annotation["brenda"] = "2.1.2.10"
+    THFAT.annotation["kegg.reaction"] = "R02300"
+    THFAT.annotation["brenda"] = "2.1.2.10"
+    FOMETRi.add_metabolites({met_c: 1, met_d: 1, met_a: -1, met_b: -1})
+    THFAT.add_metabolites({met_c: -1, met_d: -1, met_a: 1, met_b: 1})
+    base.add_reactions([FOMETRi, THFAT])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def dup_rxns_irrev_exchanges(base):
+    """
+    Provide a model with duplicate exchanges.
+
+    """
+    met_a = cobra.Metabolite("A_c", compartment="c")
+    met_a.annotation["inchikey"] = "123"
+    ex1 = cobra.Reaction("ex1", upper_bound=1000, lower_bound=0)
+    ex2 = cobra.Reaction("ex2", upper_bound=1000, lower_bound=0)
+    ex1.add_metabolites({met_a: 1})
+    ex2.add_metabolites({met_a: 1})
+    base.add_reactions([ex1, ex2])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def identical_genes(base):
+    """Provide a model with reactions with identical genes."""
+    rxn_1 = cobra.Reaction("RXN1")
+    rxn_1.gene_reaction_rule = 'gene1 or gene2'
+    rxn_2 = cobra.Reaction("NXR")
+    rxn_2.gene_reaction_rule = 'gene1 or gene2'
+    met_1 = cobra.Metabolite("met1")
+    met_2 = cobra.Metabolite("met2")
+    rxn_1.add_metabolites({met_1: 1, met_2: -1})
+    rxn_2.add_metabolites({met_1: 1, met_2: -1})
+    base.add_reactions([rxn_1, rxn_2])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def different_genes(base):
+    """Provide a model with reactions with different genes."""
+    rxn_1 = cobra.Reaction("RXN1")
+    rxn_1.gene_reaction_rule = 'b2912'
+    rxn_2 = cobra.Reaction("NXR")
+    rxn_2.gene_reaction_rule = 'b2551'
+    met_1 = cobra.Metabolite("met1")
+    met_2 = cobra.Metabolite("met2")
+    rxn_1.add_metabolites({met_1: 1, met_2: -1})
+    rxn_2.add_metabolites({met_1: 1, met_2: -1})
+    base.add_reactions([rxn_1, rxn_2])
+    return base
+
+
 @pytest.mark.parametrize("model, num", [
     ("empty", 0),
     ("three_missing", 3),
@@ -332,7 +677,7 @@ def test_gene_protein_reaction_rule_presence(model, num):
             basic.check_gene_protein_reaction_rule_presence(
                 model
             )
-        ).difference(set(model.exchanges))
+        ).difference(set(model.boundary))
     assert len(missing_gpr_metabolic_rxns) == num
 
 
@@ -351,7 +696,8 @@ def test_metabolic_coverage(model, coverage):
 @pytest.mark.parametrize("model, num", [
     ("empty", 0),
     ("unconstrained_rxn", 0),
-    ("nonzero_constrained_rxn", 2),
+    ("nonzero_constrained_rxn", 1),
+    ("no_nonzero_constrained_rxn", 0),
 ], indirect=["model"])
 def test_find_nonzero_constrained_reactions(model, num):
     """Expect amount of non-zero rxns to be identified correctly."""
@@ -408,16 +754,16 @@ def test_ngam_presence(model, num):
 ], indirect=["model"])
 def test_compartments_presence(model, boolean):
     """Expect amount of compartments to be identified correctly."""
-    assert (len(model.get_metabolite_compartments()) >= 3) == boolean
+    assert (len(model.compartments) >= 3) == boolean
 
 
 @pytest.mark.parametrize("model, num", [
     ("gpr_present", 0),
     ("gpr_missing", 0),
-    ("gpr_present_complex", 4)
+    ("gpr_present_complex", 3)
 ], indirect=["model"])
-def test_enzyme_complex_presence(model, num):
-    """Expect amount of enzyme complexes to be identified correctly."""
+def test_find_protein_complexes(model, num):
+    """Expect the number of reactions to be identified correctly."""
     assert len(basic.find_protein_complexes(model)) == num
 
 
@@ -442,7 +788,7 @@ def test_find_constrained_pure_metabolic_reactions(model, num):
     """Expect num of contrained metabolic rxns to be identified correctly."""
     pmr = basic.find_pure_metabolic_reactions(model)
     contrained_pmr = set(
-        [rxn for rxn in pmr if basic.is_constrained_reaction(rxn)])
+        [rxn for rxn in pmr if basic.is_constrained_reaction(model, rxn)])
     assert len(contrained_pmr) == num
 
 
@@ -455,7 +801,8 @@ def test_find_constrained_transport_reactions(model, num):
     """Expect num of contrained transport rxns to be identified correctly."""
     transporters = helpers.find_transport_reactions(model)
     constrained_transporters = set(
-        [rxn for rxn in transporters if basic.is_constrained_reaction(rxn)])
+        [rxn for rxn in transporters if basic.is_constrained_reaction(
+            model, rxn)])
     assert len(constrained_transporters) == num
 
 
@@ -480,8 +827,84 @@ def test_find_unique_metabolites(model, num):
 
 
 @pytest.mark.parametrize("model, num", [
+    ("dup_mets_in_c", 1),
+    ("dup_mets_in_c_wrong_annotation", 0),
+    ("gpr_missing", 0)
+], indirect=["model"])
+def test_find_duplicate_metabolites_in_compartments(model, num):
+    """Expect amount of duplicate metabolites to be identified correctly."""
+    assert len(basic.find_duplicate_metabolites_in_compartments(model)) == num
+
+
+@pytest.mark.parametrize("model, num", [
+    ("empty", 0),
+    ("dup_rxns", 2),
+    ("dup_rxns_multiple_anns", 2),
+    ("dup_rxns_partial_matching_multiple_anns", 2),
+    ("dup_rxns_list_anns", 2),
+    ("dup_rxns_multiple_list_anns", 2),
+    ("dup_rxns_no_matching_multiple_anns", 0),
+    ("dup_rxns_multiple_list_anns_no_match", 0),
+    ("dup_rxns_compartment", 2),
+    ("dup_rxns_irrev", 2),
+    ("gpr_missing", 0)
+], indirect=["model"])
+def test_find_reactions_with_partially_identical_annotations(model, num):
+    """Expect amount of duplicate reactions to be identified correctly."""
+    _, total = basic.find_reactions_with_partially_identical_annotations(model)
+    assert total == num
+
+
+@pytest.mark.parametrize("model, expected", [
+    ("empty", 0),
+    ("dup_rxns", 2),
+    ("dup_rxns_rev", 0),
+    ("dup_rxns_irrev", 0),
+    ("dup_rxns_compartment", 0),
+    ("dup_rxns_irrev_exchanges", 2),
+], indirect=["model"])
+def test_find_duplicate_reactions(model, expected):
+    """Expect amount of duplicate reactions to be identified correctly."""
+    _, num = basic.find_duplicate_reactions(model)
+    assert num == expected
+
+
+@pytest.mark.parametrize("model, num", [
+    ("empty", 0),
+    ("identical_genes", 2),
+    ("different_genes", 0),
+    ("gpr_missing", 0)
+], indirect=["model"])
+def test_find_reactions_with_identical_genes(model, num):
+    """Expect amount of duplicate reactions to be identified correctly."""
+    _, total = basic.find_reactions_with_identical_genes(model)
+    assert total == num
+
+
+@pytest.mark.parametrize("model, num", [
     ("transport_gpr", 1)
 ], indirect=["model"])
 def test_check_transport_reaction_gpr_presence(model, num):
     """Expect amount of transport reactions without gpr to be identified."""
     assert len(basic.check_transport_reaction_gpr_presence(model)) == num
+
+
+@pytest.mark.parametrize("model, num", [
+    ("rxns_with_two_substrates", 2),
+    ("rxns_with_two_false_substrates", 0),
+    ("rxns_no_exchange", 0),
+], indirect=["model"])
+def test_find_medium_metabolites(model, num):
+    """Expect amount of medium metabolites be identified."""
+    assert len(basic.find_medium_metabolites(model)) == num
+
+
+@pytest.mark.parametrize("model, num", [
+    ("non_metabolic_reactions", 1),
+    ("transport_gpr", 2),
+    pytest.param("gpr_missing", 2,
+                 marks=pytest.mark.raises(exception=RuntimeError)),
+], indirect=["model"])
+def test_find_external_metabolites(model, num):
+    """Expect a specific number of external metabolites to be found."""
+    assert len(basic.find_external_metabolites(model)) == num

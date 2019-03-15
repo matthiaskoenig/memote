@@ -21,6 +21,8 @@ from __future__ import absolute_import
 
 import logging
 
+from pandas import DataFrame
+
 from memote.experimental.experiment import Experiment
 
 __all__ = ("GrowthExperiment",)
@@ -44,6 +46,43 @@ class GrowthExperiment(Experiment):
         """
         super(GrowthExperiment, self).__init__(**kwargs)
 
-    def evaluate(self, model):
+    def load(self, dtype_conversion=None):
+        """
+        Load the data table and corresponding validation schema.
+
+        Parameters
+        ----------
+        dtype_conversion : dict
+            Column names as keys and corresponding type for loading the data.
+            Please take a look at the `pandas documentation
+            <https://pandas.pydata.org/pandas-docs/stable/io.html#specifying-column-data-types>`__
+            for detailed explanations.
+
+        """
+        if dtype_conversion is None:
+            dtype_conversion = {"growth": str}
+        super(GrowthExperiment, self).load(dtype_conversion=dtype_conversion)
+        self.data["growth"] = self.data["growth"].isin(self.TRUTHY)
+
+    def evaluate(self, model, threshold=0.1):
         """Evaluate in silico growth rates."""
-        pass
+        with model:
+            if self.medium is not None:
+                self.medium.apply(model)
+            if self.objective is not None:
+                model.objective = self.objective
+            model.add_cons_vars(self.constraints)
+            threshold *= model.slim_optimize()
+            growth = list()
+            for row in self.data.itertuples(index=False):
+                with model:
+                    exchange = model.reactions.get_by_id(row.exchange)
+                    if bool(exchange.reactants):
+                        exchange.lower_bound = -row.uptake
+                    else:
+                        exchange.upper_bound = row.uptake
+                    growth.append(model.slim_optimize() >= threshold)
+        return DataFrame({
+            "exchange": self.data["exchange"],
+            "growth": growth
+        })

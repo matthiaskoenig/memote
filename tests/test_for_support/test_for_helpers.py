@@ -26,6 +26,7 @@ import memote.support.helpers as helpers
 from memote.utils import register_with
 
 MODEL_REGISTRY = dict()
+REACTION_REGISTRY = dict()
 
 
 @register_with(MODEL_REGISTRY)
@@ -218,10 +219,10 @@ def energy_transfer_annotations(base):
 @register_with(MODEL_REGISTRY)
 def labeled_reaction(base):
     """Provide a model with a labeled transport reaction."""
-    a = cobra.Metabolite("a")
-    b = cobra.Metabolite("b")
+    a = cobra.Metabolite("a", compartment="c")
+    b = cobra.Metabolite("b", compartment="p")
     rxn = cobra.Reaction("rxn")
-    rxn.annotation["SBO"] = "SBO:0000655"
+    rxn.annotation["sbo"] = "SBO:0000655"
     rxn.add_metabolites({a: -1, b: 1})
     base.add_reactions([rxn])
     return base
@@ -234,6 +235,59 @@ def unlabeled_reaction(base):
     b = cobra.Metabolite("b")
     rxn = cobra.Reaction("rxn")
     rxn.add_metabolites({a: -1, b: 1})
+    base.add_reactions([rxn])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
+def ndpk1_annotation(base):
+    """Provide a model with a reportedly false positive."""
+    a = cobra.Metabolite("atp_c", compartment="c")
+    b = cobra.Metabolite("adp_c", compartment="c")
+    c = cobra.Metabolite("gtp_c", compartment="c")
+    d = cobra.Metabolite("gdp_c", compartment="c")
+    b.charge = -3
+    b.formula = "C10H12N5O10P2"
+    b.annotation = {
+        "chebi": "45626",
+        "kegg.compound": "cpd00008",
+        "biocyc": "ADP",
+        "seed.compound": "cpd00008",
+        "pubchem": "6022",
+        "fc_source": "MetaCyc"
+    }
+    a.charge = -4
+    a.formula = "C10H12N5O13P3"
+    a.annotation = {
+        "chebi": "30616",
+        "kegg.compound": "C00002",
+        "biocyc": "ATP",
+        "seed.compound": "cpd00002",
+        "pubchem": "5957",
+        "fc_source": "MetaCyc"
+    }
+    c.charge = -4
+    c.formula = "C10H12N5O14P3"
+    c.annotation = {
+        "chebi": "57600",
+        "kegg.compound": "C00044",
+        "biocyc": "GTP",
+        "seed.compound": "cpd00038",
+        "pubchem": "6830",
+        "fc_source": "MetaCyc"
+    }
+    d.charge = -3
+    d.formula = "C10H12N5O11P2"
+    d.annotation = {
+        "chebi": "58189",
+        "kegg.compound": "C00035",
+        "biocyc": "GDP",
+        "seed.compound": "cpd00031",
+        "pubchem": "8977",
+        "fc_source": "MetaCyc"
+    }
+    rxn = cobra.Reaction("NDPK1")
+    rxn.add_metabolites({a: -1, d: -1, b: 1, c: 1})
     base.add_reactions([rxn])
     return base
 
@@ -264,7 +318,7 @@ def one_exchange(base):
                           compartment='e'): -1}
     )
     rxn.bounds = -1, 5
-    base.add_reaction(rxn)
+    base.add_reactions([rxn])
     return base
 
 
@@ -287,7 +341,14 @@ def find_met_id(base):
     f = cobra.Metabolite("MNXM161", compartment='c')
     # Coenzyme A - Seed ID
     g = cobra.Metabolite("cpd00010", compartment='c')
-    base.add_metabolites([a, b, c, d, e, f, g])
+    # ADP - Cryptic ID - MNX ID in the annotation
+    h = cobra.Metabolite("OVER9000_c0", compartment='c')
+    h.annotation = {"metanetx.chemical": "MNXM7"}
+    # Proton - Cryptic ID - Chebi array in the annotation
+    i = cobra.Metabolite("x12", compartment='c')
+    i.annotation = {"chebi": ["15378", "10744", "13357", "5584",
+                              "24636", "29233", "29234"]}
+    base.add_metabolites([a, b, c, d, e, f, g, h, i])
     return base
 
 
@@ -387,7 +448,7 @@ def biomass_sbo(base):
     c = cobra.Metabolite("RNA_c", compartment="c")
     d = cobra.Metabolite("GAM_c", compartment="c")
     rxn1 = cobra.Reaction("R0001")
-    rxn1.annotation = {'SBO': 'SBO:0000629'}
+    rxn1.annotation = {'sbo': 'SBO:0000629'}
     rxn1.add_metabolites({a: -1, b: -1, c: -1, d: -1})
     base.add_reactions([rxn1])
     return base
@@ -409,6 +470,56 @@ def biomass_metabolite(base):
     return base
 
 
+@register_with(REACTION_REGISTRY)
+def transport_reaction_true():
+    """Provide a transport reaction identifiable through met annotations"""
+    a = cobra.Metabolite("X", compartment="c")
+    a.annotation["bigg.metabolite"] = "co2"
+    b = cobra.Metabolite("x", compartment="e")
+    b.annotation["bigg.metabolite"] = "co2"
+    r = cobra.Reaction("Transporter")
+    r.add_metabolites({a: -1, b: 1})
+    return r
+
+
+@register_with(REACTION_REGISTRY)
+def transport_reaction_missing_annotation():
+    """Provide a transport reaction identifiable through met annotations"""
+    a = cobra.Metabolite("X", compartment="c")
+    b = cobra.Metabolite("x", compartment="e")
+    r = cobra.Reaction("Transporter_Missing_Ann")
+    r.add_metabolites({a: -1, b: 1})
+    return r
+
+
+@register_with(REACTION_REGISTRY)
+def transport_reaction_missing_values():
+    """Provide a transport reaction identifiable through met annotations"""
+    a = cobra.Metabolite("X", compartment="c")
+    a.annotation["bigg.metabolite"] = None
+    b = cobra.Metabolite("x", compartment="e")
+    b.annotation["bigg.metabolite"] = None
+    r = cobra.Reaction("Transporter_Missing_Values")
+    r.add_metabolites({a: -1, b: 1})
+    return r
+
+
+@register_with(REACTION_REGISTRY)
+def transport_reaction_false():
+    """Provide a fake transport reaction that uses SBO terms"""
+    a = cobra.Metabolite("X", compartment="c")
+    a.annotation["sbo"] = "SBO:00001"
+    b = cobra.Metabolite("XH", compartment="c")
+    b.annotation["sbo"] = "SBO:00001"
+    c = cobra.Metabolite("DH", compartment="e")
+    c.annotation["sbo"] = "SBO:00001"
+    d = cobra.Metabolite("D", compartment="e")
+    d.annotation["sbo"] = "SBO:00001"
+    r = cobra.Reaction("ElectronTransfer")
+    r.add_metabolites({a: -1, b: 1, c: -1, d: 1})
+    return r
+
+
 @pytest.mark.parametrize("model, num", [
     ("uni_anti_symport_formulae", 3),
     ("uni_anti_symport_annotations", 3),
@@ -421,21 +532,12 @@ def biomass_metabolite(base):
     ("phosphotransferase_system_formulae", 1),
     ("phosphotransferase_system_annotations", 0),
     ("labeled_reaction", 1),
-    ("unlabeled_reaction", 0)
+    ("unlabeled_reaction", 0),
+    ("ndpk1_annotation", 0)
 ], indirect=["model"])
 def test_find_transport_reactions(model, num):
     """Expect amount of transporters to be identified correctly."""
     assert len(helpers.find_transport_reactions(model)) == num
-
-
-@pytest.mark.parametrize("gpr_str, expected", [
-    ("gene1 and gene2", [["gene1", "gene2"]]),
-    ("gene1 or gene2", [["gene1"], ["gene2"]]),
-    ("gene1 and (gene2 or gene3)", [["gene1", "gene2"], ["gene1", "gene3"]])
-])
-def test_find_functional_units(gpr_str, expected):
-    """Expect type of enzyme complexes to be identified correctly."""
-    assert list(helpers.find_functional_units(gpr_str)) == expected
 
 
 @pytest.mark.parametrize("model, met_pair, expected", [
@@ -464,6 +566,8 @@ def test_open_boundaries(model, reaction_id, bounds):
     ("find_met_id", "MNXM29", None, "GLY"),
     ("find_met_id", "MNXM161", None, "MNXM161"),
     ("find_met_id", "MNXM12", None, "cpd00010"),
+    ("find_met_id", "MNXM7", "c", "OVER9000_c0"),
+    ("find_met_id", "MNXM1", "c", "x12"),
     ("no_compartments", "MNXM161", None, "MNXM161"),
 ], indirect=["model"])
 def test_find_met_in_model_accurate_results(
@@ -480,11 +584,11 @@ def test_find_met_in_model_accurate_results(
     pytest.param("find_met_incorrect_xref", "MNXM1", "c",
                  marks=pytest.mark.raises(exception=RuntimeError)),
     pytest.param("find_met_incorrect_xref", "MNXM13", None,
-                 marks=pytest.mark.raises(exception=RuntimeError)),
+                 marks=pytest.mark.raises(exception=ValueError)),
     pytest.param("find_met_incorrect_xref", "MNXM13", "c",
-                 marks=pytest.mark.raises(exception=RuntimeError)),
+                 marks=pytest.mark.raises(exception=ValueError)),
     pytest.param("find_met_incorrect_xref", "MNXM8", "c",
-                 marks=pytest.mark.raises(exception=RuntimeError))
+                 marks=pytest.mark.raises(exception=RuntimeError)),
 ], indirect=["model"])
 def test_find_met_in_model_exceptions(model, mnx_id, compartment_id):
     """Expect the function to raise the correct exceptions."""
@@ -555,3 +659,16 @@ def test_find_biomass_reaction(model, expected):
     Expect the biomass reaction to be identified correctly.
     """
     assert len(helpers.find_biomass_reaction(model)) == expected
+
+
+@pytest.mark.parametrize("reaction, boolean", [
+    ("transport_reaction_true", True),
+    ("transport_reaction_false", None),
+    ("transport_reaction_missing_annotation", None),
+    ("transport_reaction_missing_values", None)
+], indirect=["reaction"])
+def test_is_transport_reaction_annotations(reaction, boolean):
+    """
+    Expect the reaction to be identified as transport reaction by annotations.
+    """
+    assert helpers.is_transport_reaction_annotations(reaction) == boolean

@@ -21,11 +21,12 @@ Contents
 .. toctree::
    :maxdepth: 2
 
+   installation
    getting_started
    flowchart
+   experimental_data
    custom_tests
    test_suite
-   api
    contributing
    authors
    history

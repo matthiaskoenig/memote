@@ -97,6 +97,27 @@ def sum_outside_of_deviation(base):
 
 
 @register_with(MODEL_REGISTRY)
+def sum_missing_formula(base):
+    """Define a biomass reaction whose components lack a formula."""
+    met_a = cobra.Metabolite("lipid_c", "H744")
+    met_b = cobra.Metabolite("protein_c", "H119")
+    met_c = cobra.Metabolite("rna_c")
+    met_d = cobra.Metabolite("dna_c")
+    met_e = cobra.Metabolite("ash_c", None)
+    # Reactions
+    rxn_1 = cobra.Reaction("BIOMASS_TEST")
+    rxn_1.add_metabolites({
+        met_a: -0.2,
+        met_b: -0.2,
+        met_c: -0.2,
+        met_d: -0.2,
+        met_e: -0.2
+    })
+    base.add_reactions([rxn_1])
+    return base
+
+
+@register_with(MODEL_REGISTRY)
 def precursors_producing(base):
     met_a = cobra.Metabolite("lipid_c", compartment='c')
     met_b = cobra.Metabolite("protein_c", compartment='c')
@@ -139,9 +160,13 @@ def precursors_uptake_limited(base):
     rxn3 = cobra.Reaction("MET_Ctec", lower_bound=-1000, upper_bound=1000)
     rxn3.add_metabolites({met_c: 1, met_c1: -1})
     base.add_reactions([rxn, rxn1, rxn2, rxn3])
-    base.add_boundary(met_a1, ub=5)
-    base.add_boundary(met_b1)
-    base.add_boundary(met_c1)
+    ex1 = cobra.Reaction("EX_lipid_e", lower_bound=-5, upper_bound=5)
+    ex2 = cobra.Reaction("EX_protein_e", lower_bound=-1000, upper_bound=1000)
+    ex3 = cobra.Reaction("EX_rna_e", lower_bound=-1000, upper_bound=1000)
+    ex1.add_metabolites({met_a1: -1})
+    ex2.add_metabolites({met_b1: -1})
+    ex3.add_metabolites({met_c1: -1})
+    base.add_reactions([ex1, ex2, ex3])
     base.objective = rxn
     return base
 
@@ -164,9 +189,13 @@ def precursors_uptake_limited_in_alien_species(base):
     rxn3 = cobra.Reaction("MET_Ctec", lower_bound=-1000, upper_bound=1000)
     rxn3.add_metabolites({met_c: 1, met_c1: -1})
     base.add_reactions([rxn, rxn1, rxn2, rxn3])
-    base.add_boundary(met_a1, ub=5)
-    base.add_boundary(met_b1)
-    base.add_boundary(met_c1)
+    ex1 = cobra.Reaction("EX_lipid_e", lower_bound=-5, upper_bound=5)
+    ex2 = cobra.Reaction("EX_protein_e", lower_bound=-1000, upper_bound=1000)
+    ex3 = cobra.Reaction("EX_rna_e", lower_bound=-1000, upper_bound=1000)
+    ex1.add_metabolites({met_a1: -1})
+    ex2.add_metabolites({met_b1: -1})
+    ex3.add_metabolites({met_c1: -1})
+    base.add_reactions([ex1, ex2, ex3])
     base.objective = rxn
     return base
 
@@ -214,8 +243,8 @@ def precursors_not_in_medium(base):
     rxn3 = cobra.Reaction("MET_Ctec", lower_bound=-1000, upper_bound=1000)
     rxn3.add_metabolites({met_c: 1, met_c1: -1})
     base.add_reactions([rxn, rxn1, rxn2, rxn3])
-    base.add_boundary(met_a1, ub=0)
-    base.add_boundary(met_b1, ub=0)
+    base.add_boundary(met_a1, lb=0)
+    base.add_boundary(met_b1, lb=0)
     base.add_boundary(met_c1)
     base.objective = rxn
     return base
@@ -471,9 +500,36 @@ def essential_not_in_model(base):
     return base
 
 
+@register_with(MODEL_REGISTRY)
+def precursor_demand_exists(base):
+    met_a = cobra.Metabolite("lipid_c", compartment='c')
+    met_b = cobra.Metabolite("protein_c", compartment='c')
+    met_c = cobra.Metabolite("rna_c", compartment='c')
+    met_a1 = cobra.Metabolite("lipid_e", compartment='e')
+    met_b1 = cobra.Metabolite("protein_e", compartment='e')
+    met_c1 = cobra.Metabolite("rna_e", compartment='e')
+    # Reactions
+    rxn = cobra.Reaction("BIOMASS_TEST", lower_bound=0, upper_bound=1000)
+    rxn.add_metabolites({met_a: -1, met_b: -5, met_c: -2})
+    rxn1 = cobra.Reaction("MET_Atec", lower_bound=-1000, upper_bound=1000)
+    rxn1.add_metabolites({met_a: 1, met_a1: -1})
+    rxn2 = cobra.Reaction("MET_Btec", lower_bound=-1000, upper_bound=1000)
+    rxn2.add_metabolites({met_b: 1, met_b1: -1})
+    rxn3 = cobra.Reaction("MET_Ctec", lower_bound=-1000, upper_bound=0)
+    rxn3.add_metabolites({met_c: 1, met_c1: -1})
+    base.add_reactions([rxn, rxn1, rxn2, rxn3])
+    base.add_boundary(met_a, type="demand")
+    base.add_boundary(met_a1)
+    base.add_boundary(met_b1)
+    base.add_boundary(met_c1)
+    base.objective = rxn
+    return base
+
+
 @pytest.mark.parametrize("model, expected", [
     ("sum_within_deviation", True),
     ("sum_outside_of_deviation", False),
+    ("sum_missing_formula", False),
 ], indirect=["model"])
 def test_biomass_weight_production(model, expected):
     """
@@ -505,13 +561,14 @@ def test_biomass_production(model, expected):
 @pytest.mark.parametrize("model, num", [
     ("precursors_producing", 0),
     ("precursors_not_in_medium", 2),
-    ("precursors_blocked", 1)
+    ("precursors_blocked", 1),
+    ("precursor_demand_exists", 1)
 ], indirect=["model"])
 def test_production_biomass_precursors_default(model, num):
     """
     Expect that there are no biomass precursors that cannot be produced.
 
-    This is without changing the model"s default state.
+    This is without changing the model's default state.
     """
     biomass_rxns = helpers.find_biomass_reaction(model)
     for rxn in biomass_rxns:
@@ -532,8 +589,7 @@ def test_production_biomass_precursors_exchange(model, num):
     """
     biomass_rxns = helpers.find_biomass_reaction(model)
     for rxn in biomass_rxns:
-        for exchange in model.exchanges:
-            exchange.bounds = (-1000, 1000)
+        helpers.open_boundaries(model)
         blocked_mets = biomass.find_blocked_biomass_precursors(rxn, model)
         assert len(blocked_mets) == num
 

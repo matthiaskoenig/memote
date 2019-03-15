@@ -71,9 +71,9 @@ def test_test_model_result(model):
 ], indirect=["model"])
 def test_snapshot_report_file(model, tmpdir):
     filename = str(tmpdir.join("index.html"))
-    _, results = api.test_model(model, results=True)
-    api.snapshot_report(results, filename=filename)
-    assert exists(filename)
+    _, results = api.test_model(model, results=True, pytest_args=["--tb", "no"])
+    report = api.snapshot_report(results, html=True)
+    assert report.startswith("<!doctype html>")
     # TODO: Perform some content checks here.
 
 
@@ -98,3 +98,11 @@ def test_history_report_file(history_directory, tmpdir):
 @pytest.mark.xfail(reason="TODO: Function not implemented yet.")
 def test_diff_report_file():
     api.diff_report()
+
+
+def test_validate_model(model_file):
+    """Expect a valid returned model."""
+    model, _, _ = api.validate_model(model_file)
+    assert model.id == "e_coli_core"
+    assert len(model.metabolites) == 72
+    assert len(model.reactions) == 95

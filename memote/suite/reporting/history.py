@@ -19,19 +19,14 @@
 
 from __future__ import absolute_import
 
-import json
 import logging
-from string import Template
 
-from importlib_resources import read_text
-
-import memote.suite.templates as templates
-from memote.utils import log_json_incompatible_types
+from memote.suite.reporting.report import Report
 
 LOGGER = logging.getLogger(__name__)
 
 
-class HistoryReport(object):
+class HistoryReport(Report):
     """
     Render a rich report using the git repository history.
 
@@ -42,9 +37,7 @@ class HistoryReport(object):
 
     """
 
-    _valid_indexes = frozenset(["time", "hash"])
-
-    def __init__(self, history, configuration, index="hash", **kwargs):
+    def __init__(self, history, configuration, **kwargs):
         """
         Initialize the git history report.
 
@@ -52,15 +45,18 @@ class HistoryReport(object):
         ----------
         history : memote.HistoryManager
             An instance that manages access to test results.
-        index : {"hash", "time"}, optional
-            The default horizontal axis type for all plots.
+        configuration : memote.MemoteConfiguration
+            A memote configuration structure.
+
 
         """
-        super(HistoryReport, self).__init__(**kwargs)
-        self._template = Template(
-            read_text(templates, "index.html", encoding="utf-8"))
+        super(HistoryReport, self).__init__(
+            result=None, configuration=configuration, **kwargs)
+        self._report_type = "history"
         self._history = history
         self.config = configuration
+        self.result = self.collect_history()
+        self.result.update(self.config)
 
     def collect_history(self):
         """Build the structure of results in terms of a commit history."""
@@ -78,9 +74,24 @@ class HistoryReport(object):
 
         base = dict()
         tests = base.setdefault("tests", dict())
+        score = base.setdefault("score", dict())
+        score_collection = score.setdefault("total_score", dict())
         for branch, commits in self._history.iter_branches():
-            for commit in commits:
-                result = self._history.get_result(commit, )
+            for commit in reversed(commits):
+                result = self.result = self._history.get_result(commit)
+                # Calculate the score for each result and store all the total
+                # scores for each commit in the base dictionary.
+                self.compute_score()
+                total_score = self.result["score"]["total_score"]
+                score_collection.setdefault("history", list())
+                score_collection["format_type"] = "score"
+                score_collection["history"].append({
+                    "branch": branch,
+                    "commit": commit,
+                    "metric": total_score})
+                # Now arrange the results for each test into the appropriate
+                # format. Specifically such that the Accordion and the Vega
+                # Plot components can easily read them.
                 for test in result.cases:
                     tests.setdefault(test, dict())
                     if "title" not in tests[test]:
@@ -88,8 +99,9 @@ class HistoryReport(object):
                     if "summary" not in tests[test]:
                         tests[test]["summary"] = result.cases[test]["summary"]
                     if "type" not in tests[test]:
-                        tests[test]["type"] = result.cases[test]["type"]
-                    type = tests[test]["type"]
+                        tests[test]["format_type"] = result.cases[test][
+                            "format_type"]
+                    type = tests[test]["format_type"]
                     metric = result.cases[test].get("metric")
                     data = result.cases[test].get("data")
                     res = result.cases[test].get("result")
@@ -112,17 +124,3 @@ class HistoryReport(object):
                             "data": format_data(data),
                             "result": res})
         return base
-
-    def render_html(self):
-        """Render a rich report for the repository."""
-        self._history.build_branch_structure()
-        self._history.load_history()
-        structure = self.collect_history()
-        structure.update(self.config)
-        try:
-            return self._template.safe_substitute(
-                report_type="history",
-                results=json.dumps(structure, sort_keys=False,
-                                   indent=None, separators=(",", ":")))
-        except TypeError:
-            log_json_incompatible_types(structure)

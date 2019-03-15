@@ -45,7 +45,7 @@ class ResultCollectionPlugin(object):
     # Seems brittle, can we do better?
     _param = re.compile(r"\[(?P<param>[a-zA-Z0-9_.\-]+)\]$")
 
-    def __init__(self, model, experimental_config=None,
+    def __init__(self, model, sbml_version=None, experimental_config=None,
                  exclusive=None, skip=None, **kwargs):
         """
         Collect and store values during testing.
@@ -54,6 +54,9 @@ class ResultCollectionPlugin(object):
         ----------
         model : cobra.Model
             The metabolic model under investigation.
+        sbml_version: tuple, optional
+            A tuple reporting on the level, version, and FBC use of
+            the SBML file.
         experimental_config : memote.ExperimentConfiguration, optional
             A description of experiments.
         exclusive : iterable, optional
@@ -65,34 +68,33 @@ class ResultCollectionPlugin(object):
         """
         super(ResultCollectionPlugin, self).__init__(**kwargs)
         self._model = model
+        self._sbml_ver = sbml_version
         self._exp_config = experimental_config
         self.results = MemoteResult()
+        self.results.add_environment_information(self.results.meta)
         self._xcld = frozenset() if exclusive is None else frozenset(exclusive)
         self._skip = frozenset() if skip is None else frozenset(skip)
 
-    def pytest_namespace(self):
-        """Insert model information into the pytest namespace."""
-        namespace = dict()
-        namespace["memote"] = memote = dict()
-        memote["biomass_ids"] = [
-            rxn.id for rxn in find_biomass_reaction(self._model)]
-        memote["compartment_ids"] = sorted(self._model.compartments)
-        try:
-            memote["compartment_ids"].remove("c")
-        except ValueError:
-            LOGGER.error(
-                "The model does not contain a compartment ID labeled 'c' for "
-                "the cytosol which is an essential compartment. Many syntax "
-                "tests depend on this being labeled accordingly.")
-        # Add experimental information if there are any.
-        if self._exp_config is None:
-            memote["experimental"] = dict()
-            memote["experimental"]["essentiality"] = list()
-        else:
-            # Load experimental data.
-            self._exp_config.load_data(self._model)
-            memote["experimental"] = self._exp_config
-        return namespace
+    def pytest_generate_tests(self, metafunc):
+        """Parametrize marked functions at runtime."""
+        if metafunc.definition.get_closest_marker("biomass"):
+            metafunc.parametrize("reaction_id", [
+                rxn.id for rxn in find_biomass_reaction(self._model)])
+            return
+        if metafunc.definition.get_closest_marker("essentiality"):
+            if self._exp_config is None:
+                metafunc.parametrize("experiment", [])
+            else:
+                metafunc.parametrize("experiment",
+                                     self._exp_config.get("essentiality", []))
+            return
+        if metafunc.definition.get_closest_marker("growth"):
+            if self._exp_config is None:
+                metafunc.parametrize("experiment", [])
+            else:
+                metafunc.parametrize("experiment",
+                                     self._exp_config.get("growth", []))
+            return
 
     @pytest.hookimpl(tryfirst=True)
     def pytest_runtest_call(self, item):
@@ -130,7 +132,7 @@ class ResultCollectionPlugin(object):
             A test report object from pytest with test case result.
 
         """
-        if report.when != "call":
+        if report.when == 'teardown':
             return
         item_name = report.location[2]
 
@@ -156,12 +158,13 @@ class ResultCollectionPlugin(object):
             case["duration"] = report.duration
             case["result"] = report.outcome
 
-    @pytest.fixture(scope="session")
-    def read_only_model(self):
-        """Provide the model for the complete test session."""
-        return self._model
-
     @pytest.fixture(scope="function")
-    def model(self, read_only_model):
-        """Provide a pristine model for a test unit."""
-        return self._model.copy()
+    def model(self):
+        """Provide each test case with a pristine model."""
+        with self._model as model:
+            yield model
+
+    @pytest.fixture(scope="session")
+    def sbml_version(self):
+        """Provide SBML level, version, and FBC use."""
+        return self._sbml_ver

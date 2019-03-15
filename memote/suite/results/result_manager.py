@@ -19,17 +19,12 @@
 
 from __future__ import absolute_import
 
-import json
 import logging
-import platform
+import gzip
+import json
 from builtins import open
-from datetime import datetime
 
-import pip
-from future.utils import raise_with_traceback
-
-from memote.utils import log_json_incompatible_types
-from memote.version_info import PKG_ORDER
+from memote.utils import jsonify
 from memote.suite.results.result import MemoteResult
 
 __all__ = ("ResultManager",)
@@ -44,20 +39,7 @@ class ResultManager(object):
         """Initialize a JSON file storage manager."""
         super(ResultManager, self).__init__(**kwargs)
 
-    @staticmethod
-    def add_environment(meta):
-        """Record environment information."""
-        meta["timestamp"] = datetime.utcnow().isoformat(" ")
-        meta["platform"] = platform.system()
-        meta["release"] = platform.release()
-        meta["python"] = platform.python_version()
-        dependencies = frozenset(PKG_ORDER)
-        meta["packages"] = dict(
-            (dist.project_name, dist.version) for dist in
-            pip.get_installed_distributions()
-            if dist.project_name in dependencies)
-
-    def store(self, result, filename, env_info=True, pretty=True):
+    def store(self, result, filename, pretty=True):
         """
         Write a result to the given file.
 
@@ -67,32 +49,32 @@ class ResultManager(object):
             The dictionary structure of results.
         filename : str or pathlib.Path
             Store results directly to the given filename.
-        env_info : bool, optional
-            Add Python environment information to the result object.
         pretty : bool, optional
             Whether (default) or not to write JSON in a more legible format.
 
         """
-        if env_info:
-            self.add_environment(result.meta)
-        if pretty:
-            kwargs = dict(sort_keys=True, indent=2,
-                          separators=(",", ": "), ensure_ascii=False)
-        else:
-            kwargs = dict(sort_keys=False, indent=None,
-                          separators=(",", ":"), ensure_ascii=False)
         LOGGER.info("Storing result in '%s'.", filename)
-        with open(filename, "w", encoding="utf-8") as file_handle:
-            try:
-                return file_handle.write(json.dumps(result, **kwargs))
-            except TypeError as error:
-                log_json_incompatible_types(result)
-                raise_with_traceback(error)
+        if filename.endswith(".gz"):
+            with gzip.open(filename, "wb") as file_handle:
+                file_handle.write(
+                    jsonify(result, pretty=pretty).encode("utf-8")
+                )
+        else:
+            with open(filename, "w", encoding="utf-8") as file_handle:
+                file_handle.write(jsonify(result, pretty=pretty))
 
     def load(self, filename):
         """Load a result from the given JSON file."""
-        # TODO: validate the read-in JSON maybe?
         LOGGER.info("Loading result from '%s'.", filename)
-        with open(filename, encoding="utf-8") as file_handle:
-            result = MemoteResult(json.load(file_handle))
+        if filename.endswith(".gz"):
+            with gzip.open(filename, "rb") as file_handle:
+                result = MemoteResult(
+                    json.loads(file_handle.read().decode("utf-8"))
+                )
+        else:
+            with open(filename, "r", encoding="utf-8") as file_handle:
+                result = MemoteResult(json.load(file_handle))
+        # TODO (Moritz Beber): Validate the read-in JSON maybe? Trade-off
+        #  between extra time taken and correctness. Maybe we re-visit this
+        #  issue when there was a new JSON format version needed.
         return result

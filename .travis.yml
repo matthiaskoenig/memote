@@ -10,8 +10,8 @@ sudo: false
 git:
   depth: 2
 cache:
-- pip: true
-- directories:
+  pip: true
+  directories:
   - "memote-report-app/node_modules"
 branches:
   only:
@@ -25,19 +25,26 @@ matrix:
   fast_finish: true
 install:
 - make reports
-- pip install -U pip setuptools wheel tox tox-travis
+- pip install --upgrade pip setuptools wheel tox tox-travis
 script:
-- travis_wait tox
+- travis_wait tox -- --cov-report=xml --cov-report=term
+after_success:
+- bash <(curl -s https://codecov.io/bash)
 
 stages:
   - test
   - name: deploy
-    if: (repo = env(GITHUB_REPO)) AND (tag IS present)
+    if: tag IS present
 
 jobs:
   include:
     - stage: deploy
-      script: skip
+      install: skip
+      script:
+        - make reports
+        - pip install --upgrade pip setuptools wheel
+      after_success:
+        - pip --version
       deploy:
         - provider: pypi
           skip_cleanup: true
@@ -52,12 +59,6 @@ jobs:
           skip_cleanup: true
           api_key: $GITHUB_TOKEN
           body: "Please see https://github.com/${GITHUB_REPO}/blob/${TRAVIS_TAG}/HISTORY.rst for the full release notes."
-          on:
-            tags: true
-            repo: $GITHUB_REPO
-        - provider: script
-          skip_cleanup: true
-          script: ci/travis/update_docker.sh
           on:
             tags: true
             repo: $GITHUB_REPO

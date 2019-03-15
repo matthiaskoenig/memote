@@ -31,7 +31,7 @@ def find_components_without_sbo_terms(model, components):
     Parameters
     ----------
     model : cobra.Model
-        A cobrapy metabolic model.
+        The metabolic model under investigation.
     components : {"metabolites", "reactions", "genes"}
         A string denoting `cobra.Model` components.
 
@@ -42,7 +42,7 @@ def find_components_without_sbo_terms(model, components):
 
     """
     return [elem for elem in getattr(model, components) if
-            elem.annotation is None or 'SBO' not in elem.annotation]
+            elem.annotation is None or 'sbo' not in elem.annotation]
 
 
 def check_component_for_specific_sbo_term(items, term):
@@ -64,7 +64,14 @@ def check_component_for_specific_sbo_term(items, term):
         The components without any or that specific SBO term annotation.
 
     """
-    return [elem for elem in items if
-            elem.annotation is None or
-            'SBO' not in elem.annotation or
-            elem.annotation['SBO'] not in term]
+    # check for multiple allowable SBO terms
+    if isinstance(term, list):
+        return [elem for elem in items if
+                elem.annotation is None or
+                'sbo' not in elem.annotation or
+                not any(i in elem.annotation['sbo'] for i in term)]
+    else:
+        return [elem for elem in items if
+                elem.annotation is None or
+                'sbo' not in elem.annotation or
+                term not in elem.annotation['sbo']]

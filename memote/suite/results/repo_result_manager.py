@@ -100,7 +100,7 @@ class RepoResultManager(ResultManager):
             stored.
 
         """
-        return join(self._backend, "{}.json".format(git_info.hexsha))
+        return join(self._backend, "{}.json.gz".format(git_info.hexsha))
 
     @staticmethod
     def add_git(meta, git_info):
@@ -133,7 +133,9 @@ class RepoResultManager(ResultManager):
     def load(self, commit=None):
         """Load a result from the storage directory."""
         git_info = self.record_git_info(commit)
+        LOGGER.debug("Loading the result for commit '%s'.", git_info.hexsha)
         filename = self.get_filename(git_info)
+        LOGGER.debug("Loading the result '%s'.", filename)
         result = super(RepoResultManager, self).load(filename)
         self.add_git(result.meta, git_info)
         return result
